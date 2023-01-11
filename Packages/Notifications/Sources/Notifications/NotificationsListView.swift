@@ -6,6 +6,7 @@ import DesignSystem
 import Env
 
 public struct NotificationsListView: View {
+  @Environment(\.scenePhase) private var scenePhase
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var watcher: StreamWatcher
   @EnvironmentObject private var client: Client
@@ -59,6 +60,16 @@ public struct NotificationsListView: View {
         viewModel.handleEvent(event: latestEvent)
       }
     })
+    .onChange(of: scenePhase, perform: { scenePhase in
+      switch scenePhase {
+      case .active:
+        Task {
+          await viewModel.fetchNotifications()
+        }
+      default:
+        break
+      }
+    })
   }
   
   @ViewBuilder
@@ -102,8 +113,14 @@ public struct NotificationsListView: View {
         loadingRow
       }
       
-    case let .error(error):
-      Text(error.localizedDescription)
+    case .error:
+      ErrorView(title: "An error occured",
+                message: "An error occured while loading your notifications, please retry.",
+                buttonTitle: "Retry") {
+        Task {
+          await viewModel.fetchNotifications()
+        }
+      }
     }
   }
   

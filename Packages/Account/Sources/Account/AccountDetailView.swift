@@ -10,6 +10,7 @@ public struct AccountDetailView: View {
   @Environment(\.redactionReasons) private var reasons
   @EnvironmentObject private var watcher: StreamWatcher
   @EnvironmentObject private var currentAccount: CurrentAccount
+  @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var client: Client
   @EnvironmentObject private var routeurPath: RouterPath
@@ -20,6 +21,7 @@ public struct AccountDetailView: View {
   @State private var isCurrentUser: Bool = false
   @State private var isCreateListAlertPresented: Bool = false
   @State private var createListTitle: String = ""
+  @State private var isEditingAccount: Bool = false
   
   /// When coming from a URL like a mention tap in a status.
   public init(accountId: String) {
@@ -46,7 +48,8 @@ public struct AccountDetailView: View {
             Picker("", selection: $viewModel.selectedTab) {
               ForEach(isCurrentUser ? AccountDetailViewModel.Tab.currentAccountTabs : AccountDetailViewModel.Tab.accountTabs,
                       id: \.self) { tab in
-                Text(tab.title).tag(tab)
+                Image(systemName: tab.iconName)
+                  .tag(tab)
               }
             }
             .pickerStyle(.segmented)
@@ -67,6 +70,7 @@ public struct AccountDetailView: View {
             listsListView
           }
         }
+        .frame(maxWidth: .maxColumnWidth)
       }
       .scrollContentBackground(.hidden)
       .background(theme.primaryBackgroundColor)
@@ -95,6 +99,17 @@ public struct AccountDetailView: View {
         viewModel.handleEvent(event: latestEvent, currentAccount: currentAccount)
       }
     }
+    .onChange(of: isEditingAccount, perform: { isEditing in
+      if !isEditing {
+        Task {
+          await viewModel.fetchAccount()
+          await preferences.refreshServerPreferences()
+        }
+      }
+    })
+    .sheet(isPresented: $isEditingAccount, content: {
+      EditAccountView()
+    })
     .edgesIgnoringSafeArea(.top)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
@@ -213,6 +228,21 @@ public struct AccountDetailView: View {
       .scrollContentBackground(.hidden)
       .background(theme.secondaryBackgroundColor)
       .navigationTitle("About")
+      .toolbar {
+        ToolbarItem(placement: .primaryAction) {
+          Button {
+            isFieldsSheetDisplayed = false
+          } label: {
+            Image(systemName: "xmark")
+              .imageScale(.small)
+              .font(.body.weight(.semibold))
+              .frame(width: 30, height: 30)
+              .background(theme.primaryBackgroundColor.opacity(0.5))
+              .clipShape(Circle())
+          }
+          .foregroundColor(theme.tintColor)
+        }
+      }
     }
   }
   
@@ -318,7 +348,8 @@ public struct AccountDetailView: View {
           Section(account.acct) {
             if !viewModel.isCurrentUser {
               Button {
-                routeurPath.presentedSheet = .mentionStatusEditor(account: account, visibility: .pub)
+                routeurPath.presentedSheet = .mentionStatusEditor(account: account,
+                                                                  visibility: preferences.serverPreferences?.postVisibility ?? .pub)
               } label: {
                 Label("Mention", systemImage: "at")
               }
@@ -337,8 +368,19 @@ public struct AccountDetailView: View {
                 Label("Add/Remove from lists", systemImage: "list.bullet")
               }
             }
+            
             if let url = account.url {
               ShareLink(item: url)
+            }
+            
+            Divider()
+            
+            if isCurrentUser {
+              Button {
+                isEditingAccount = true
+              } label: {
+                Label("Edit Info", systemImage: "pencil")
+              }
             }
           }
         }

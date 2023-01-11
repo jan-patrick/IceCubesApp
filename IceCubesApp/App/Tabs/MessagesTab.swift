@@ -36,8 +36,8 @@ struct MessagesTab: View {
     }
     .onAppear {
       routeurPath.client = client
-      watcher.unreadMessagesCount = 0
     }
+    .withSafariRouteur()
     .environmentObject(routeurPath)
   }
 }

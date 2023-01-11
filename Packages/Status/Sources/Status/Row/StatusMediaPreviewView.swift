@@ -6,20 +6,26 @@ import NukeUI
 import DesignSystem
 
 public struct StatusMediaPreviewView: View {
+  @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var quickLook: QuickLook
   @EnvironmentObject private var theme: Theme
   
   public let attachements: [MediaAttachement]
-  public let isCompact: Bool
+  public let sensitive: Bool
+  public let isNotifications: Bool
 
   @State private var isQuickLookLoading: Bool = false
   @State private var width: CGFloat = 0
   @State private var altTextDisplayed: String?
   @State private var isAltAlertDisplayed: Bool = false
+  @State private var isHidingMedia: Bool = false
   
   private var imageMaxHeight: CGFloat {
-    if isCompact {
+    if isNotifications {
       return 50
+    }
+    if theme.statusDisplayStyle == .compact {
+      return 100
     }
     if attachements.count == 1 {
       return 300
@@ -28,8 +34,11 @@ public struct StatusMediaPreviewView: View {
   }
   
   private func size(for media: MediaAttachement) -> CGSize? {
-    if isCompact {
+    if isNotifications {
       return .init(width: 50, height: 50)
+    }
+    if theme.statusDisplayStyle == .compact {
+      return .init(width: 100, height: 100)
     }
     if let width = media.meta?.original?.width,
        let height = media.meta?.original?.height {
@@ -39,7 +48,7 @@ public struct StatusMediaPreviewView: View {
   }
   
   private func imageSize(from: CGSize, newWidth: CGFloat) -> CGSize {
-    if isCompact {
+    if isNotifications {
       return .init(width: 50, height: 50)
     }
     let ratio = newWidth / from.width
@@ -57,7 +66,7 @@ public struct StatusMediaPreviewView: View {
             }
           }
       } else {
-        if isCompact {
+        if isNotifications || theme.statusDisplayStyle == .compact {
           HStack {
             makeAttachementView(for: 0)
             makeAttachementView(for: 1)
@@ -83,12 +92,26 @@ public struct StatusMediaPreviewView: View {
         quickLookLoadingView
           .transition(.opacity)
       }
+      
+      if isHidingMedia {
+        sensitiveMediaOverlay
+          .transition(.opacity)
+      }
     }
     .alert("Image description",
            isPresented: $isAltAlertDisplayed) {
       Button("Ok", action: { })
     } message: {
       Text(altTextDisplayed ?? "")
+    }
+    .onAppear {
+      if sensitive && preferences.serverPreferences?.autoExpandmedia == .hideSensitive {
+        isHidingMedia = true
+      } else if preferences.serverPreferences?.autoExpandmedia == .hideAll {
+        isHidingMedia = true
+      } else {
+        isHidingMedia = false
+      }
     }
 
   }
@@ -104,7 +127,8 @@ public struct StatusMediaPreviewView: View {
   private func makeFeaturedImagePreview(attachement: MediaAttachement) -> some View {
     switch attachement.supportedType {
     case .image:
-      if let size = size(for: attachement),
+      if theme.statusDisplayStyle == .large,
+         let size = size(for: attachement),
          UIDevice.current.userInterfaceIdiom != .pad,
           UIDevice.current.userInterfaceIdiom != .mac {
         let avatarColumnWidth = theme.avatarPosition == .leading ? AvatarView.Size.status.size.width + .statusColumnsSpacing : 0
@@ -125,7 +149,10 @@ public struct StatusMediaPreviewView: View {
                 .shimmering()
             }
           }
-          if let alt = attachement.description, !alt.isEmpty, !isCompact {
+          if sensitive {
+            cornerSensitiveButton
+          }
+          if let alt = attachement.description, !alt.isEmpty, !isNotifications {
             Button {
               altTextDisplayed = alt
               isAltAlertDisplayed = true
@@ -156,7 +183,7 @@ public struct StatusMediaPreviewView: View {
                   .shimmering()
               })
       }
-    case .gifv, .video:
+    case .gifv, .video, .audio:
       if let url = attachement.url {
         VideoPlayerView(viewModel: .init(url: url))
           .frame(height: imageMaxHeight)
@@ -183,13 +210,16 @@ public struct StatusMediaPreviewView: View {
                   RoundedRectangle(cornerRadius: 4)
                     .fill(Color.gray)
                     .frame(maxHeight: imageMaxHeight)
-                    .frame(width: isCompact ? imageMaxHeight : proxy.frame(in: .local).width)
+                    .frame(width: isNotifications ? imageMaxHeight : proxy.frame(in: .local).width)
                     .shimmering()
                 }
               }
-              .frame(width: isCompact ? imageMaxHeight : proxy.frame(in: .local).width)
+              .frame(width: isNotifications ? imageMaxHeight : proxy.frame(in: .local).width)
               .frame(height: imageMaxHeight)
-              if let alt = attachement.description, !alt.isEmpty, !isCompact {
+              if sensitive {
+                cornerSensitiveButton
+              }
+              if let alt = attachement.description, !alt.isEmpty, !isNotifications {
                 Button {
                   altTextDisplayed = alt
                   isAltAlertDisplayed = true
@@ -202,15 +232,15 @@ public struct StatusMediaPreviewView: View {
                 .cornerRadius(4)
               }
             }
-          case .gifv, .video:
+          case .gifv, .video, .audio:
             if let url = attachement.url {
               VideoPlayerView(viewModel: .init(url: url))
-                .frame(width: isCompact ? imageMaxHeight :  proxy.frame(in: .local).width)
+                .frame(width: isNotifications ? imageMaxHeight :  proxy.frame(in: .local).width)
                 .frame(height: imageMaxHeight)
             }
           }
         }
-        .frame(width: isCompact ? imageMaxHeight : nil)
+        .frame(width: isNotifications ? imageMaxHeight : nil)
         .frame(height: imageMaxHeight)
       }
       .onTapGesture {
@@ -234,5 +264,38 @@ public struct StatusMediaPreviewView: View {
       }
     }
     .background(.ultraThinMaterial)
+  }
+  
+  private var sensitiveMediaOverlay: some View {
+    Rectangle()
+      .background(.ultraThinMaterial)
+      .overlay {
+        if !isNotifications {
+          Button {
+            withAnimation {
+              isHidingMedia = false
+            }
+          } label: {
+            if sensitive {
+              Label("Show sensitive content", systemImage: "eye")
+            } else {
+              Label("Show content", systemImage: "eye")
+            }
+          }
+          .buttonStyle(.borderedProminent)
+        }
+      }
+  }
+  
+  private var cornerSensitiveButton: some View {
+    Button {
+      withAnimation {
+        isHidingMedia = true
+      }
+    } label: {
+      Image(systemName:"eye.slash")
+    }
+    .position(x: 30, y: 30)
+    .buttonStyle(.borderedProminent)
   }
 }

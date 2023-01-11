@@ -7,6 +7,7 @@ import Models
 import DesignSystem
 
 struct SettingsTabs: View {
+  @EnvironmentObject private var pushNotifications: PushNotificationsService
   @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var client: Client
   @EnvironmentObject private var currentInstance: CurrentInstance
@@ -16,6 +17,8 @@ struct SettingsTabs: View {
   @StateObject private var routeurPath = RouterPath()
   
   @State private var addAccountSheetPresented = false
+  
+  @Binding var popToRootTab: Tab
   
   var body: some View {
     NavigationStack(path: $routeurPath.path) {
@@ -40,23 +43,28 @@ struct SettingsTabs: View {
         await currentInstance.fetchCurrentInstance()
       }
     }
+    .withSafariRouteur()
+    .environmentObject(routeurPath)
+    .onChange(of: $popToRootTab.wrappedValue) { popToRootTab in
+      if popToRootTab == .notifications {
+        routeurPath.path = []
+      }
+    }
   }
   
   private var accountsSection: some View {
     Section("Accounts") {
       ForEach(appAccountsManager.availableAccounts) { account in
-        HStack {
-          AppAccountView(viewModel: .init(appAccount: account))
-        }
-        .onTapGesture {
-          withAnimation {
-            appAccountsManager.currentAccount = account
-          }
-        }
+        AppAccountView(viewModel: .init(appAccount: account))
       }
       .onDelete { indexSet in
         if let index = indexSet.first {
           let account = appAccountsManager.availableAccounts[index]
+          if let token = account.oauthToken {
+            Task {
+              await pushNotifications.deleteSubscriptions(accounts: [.init(server: account.server, token: token)])
+            }
+          }
           appAccountsManager.delete(account: account)
         }
       }
@@ -68,6 +76,9 @@ struct SettingsTabs: View {
   @ViewBuilder
   private var generalSection: some View {
     Section("General") {
+      NavigationLink(destination: PushNotificationsView()) {
+        Label("Push notifications", systemImage: "bell.and.waves.left.and.right")
+      }
       if let instanceData = currentInstance.instance {
         NavigationLink(destination: InstanceInfoView(instance: instanceData)) {
           Label("Instance Information", systemImage: "server.rack")
@@ -78,6 +89,18 @@ struct SettingsTabs: View {
       }
       NavigationLink(destination: remoteLocalTimelinesView) {
         Label("Remote Local Timelines", systemImage: "dot.radiowaves.right")
+      }
+      Picker(selection: $preferences.preferredBrowser) {
+        ForEach(PreferredBrowser.allCases, id: \.rawValue) { browser in
+          switch browser {
+          case .inAppSafari:
+            Text("In-App Safari").tag(browser)
+          case .safari:
+            Text("System Safari").tag(browser)
+          }
+        }
+      } label: {
+        Label("Browser", systemImage: "network")
       }
     }
     .listRowBackground(theme.primaryBackgroundColor)
@@ -98,10 +121,10 @@ struct SettingsTabs: View {
         }
       }
       
-      Label("Source (Github link)", systemImage: "link")
-        .onTapGesture {
-          UIApplication.shared.open(URL(string: "https://github.com/Dimillian/IceCubesApp")!)
-        }
+      Link(destination: URL(string: "https://github.com/Dimillian/IceCubesApp")!) {
+        Label("Source (Github link)", systemImage: "link")
+      }
+      .tint(theme.labelColor)
       
       NavigationLink(destination: SupportAppView()) {
         Label("Support the app", systemImage: "wand.and.stars")

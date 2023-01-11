@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 import Timeline
 import Network
 import KeychainSwift
@@ -10,9 +11,11 @@ import RevenueCat
 @main
 struct IceCubesApp: App {
   public static let defaultServer = "mastodon.social"
-    
+  
+  @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
+  
   @Environment(\.scenePhase) private var scenePhase
-  @StateObject private var appAccountsManager = AppAccountsManager()
+  @StateObject private var appAccountsManager = AppAccountsManager.shared
   @StateObject private var currentInstance = CurrentInstance()
   @StateObject private var currentAccount = CurrentAccount()
   @StateObject private var userPreferences = UserPreferences()
@@ -31,13 +34,12 @@ struct IceCubesApp: App {
   var body: some Scene {
     WindowGroup {
       appView
-      .tint(theme.tintColor)
+      .applyTheme(theme)
       .onAppear {
         setNewClientsInEnv(client: appAccountsManager.currentClient)
-        setBarsColor(color: theme.primaryBackgroundColor)
         setupRevenueCat()
+        refreshPushSubs()
       }
-      .preferredColorScheme(theme.selectedScheme == ColorScheme.dark ? .dark : .light)
       .environmentObject(appAccountsManager)
       .environmentObject(appAccountsManager.currentClient)
       .environmentObject(quickLook)
@@ -46,36 +48,35 @@ struct IceCubesApp: App {
       .environmentObject(userPreferences)
       .environmentObject(theme)
       .environmentObject(watcher)
+      .environmentObject(PushNotificationsService.shared)
       .quickLookPreview($quickLook.url, in: quickLook.urls)
     }
-    .onChange(of: scenePhase, perform: { scenePhase in
+    .onChange(of: scenePhase) { scenePhase in
       handleScenePhase(scenePhase: scenePhase)
-    })
+    }
     .onChange(of: appAccountsManager.currentClient) { newClient in
       setNewClientsInEnv(client: newClient)
       if newClient.isAuth {
         watcher.watch(streams: [.user, .direct])
       }
     }
-    .onChange(of: theme.primaryBackgroundColor) { newValue in
-      setBarsColor(color: newValue)
-    }
   }
   
   @ViewBuilder
   private var appView: some View {
+    /*
     if UIDevice.current.userInterfaceIdiom == .pad || UIDevice.current.userInterfaceIdiom == .mac {
       splitView
     } else {
       tabBarView
     }
+    */
+    tabBarView
   }
   
   private func badgeFor(tab: Tab) -> Int {
     if tab == .notifications && selectedTab != tab {
-      return watcher.unreadNotificationsCount
-    } else if tab == .messages && selectedTab != tab {
-      return watcher.unreadMessagesCount
+      return watcher.unreadNotificationsCount + userPreferences.pushNotificationsCount
     }
     return 0
   }
@@ -123,6 +124,7 @@ struct IceCubesApp: App {
   private func setNewClientsInEnv(client: Client) {
     currentAccount.setClient(client: client)
     currentInstance.setClient(client: client)
+    userPreferences.setClient(client: client)
     watcher.setClient(client: client)
   }
   
@@ -132,6 +134,10 @@ struct IceCubesApp: App {
       watcher.stopWatching()
     case .active:
       watcher.watch(streams: [.user, .direct])
+      UIApplication.shared.applicationIconBadgeNumber = 0
+      Task {
+        await userPreferences.refreshServerPreferences()
+      }
     case .inactive:
       break
     default:
@@ -139,13 +145,32 @@ struct IceCubesApp: App {
     }
   }
   
-  private func setBarsColor(color: Color) {
-    UINavigationBar.appearance().isTranslucent = true
-    UINavigationBar.appearance().barTintColor = UIColor(color)
-  }
-  
   private func setupRevenueCat() {
     Purchases.logLevel = .error
     Purchases.configure(withAPIKey: "appl_JXmiRckOzXXTsHKitQiicXCvMQi")
+  }
+  
+  private func refreshPushSubs() {
+    PushNotificationsService.shared.requestPushNotifications()
+  }
+}
+
+class AppDelegate: NSObject, UIApplicationDelegate {
+  func application(_ application: UIApplication,
+                   didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+    try? AVAudioSession.sharedInstance().setCategory(.ambient, options: .mixWithOthers)
+    return true
+  }
+  
+  func application(_ application: UIApplication,
+                   didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    PushNotificationsService.shared.pushToken = deviceToken
+    Task {
+      await PushNotificationsService.shared.fetchSubscriptions(accounts: AppAccountsManager.shared.pushAccounts)
+      await PushNotificationsService.shared.updateSubscriptions(accounts: AppAccountsManager.shared.pushAccounts)
+    }
+  }
+  
+  func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
   }
 }

@@ -30,7 +30,6 @@ public struct StatusCardView: View {
           }
           .frame(height: 200)
         }
-        Spacer()
         HStack {
           VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -41,16 +40,16 @@ public struct StatusCardView: View {
                 .font(.body)
                 .foregroundColor(.gray)
                 .lineLimit(3)
-            } else {
-              Text(card.url.absoluteString)
-                .font(.body)
-                .foregroundColor(.gray)
-                .lineLimit(3)
             }
+            Text(card.url.host() ?? card.url.absoluteString)
+              .font(.footnote)
+              .foregroundColor(theme.tintColor)
+              .lineLimit(1)
           }
           Spacer()
         }.padding(8)
       }
+      .fixedSize(horizontal: false, vertical: true)
       .background(theme.secondaryBackgroundColor)
       .cornerRadius(16)
       .overlay(

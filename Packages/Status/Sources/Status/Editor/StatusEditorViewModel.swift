@@ -44,6 +44,9 @@ public class StatusEditorViewModel: ObservableObject {
   @Published var mediasImages: [ImageContainer] = []
   @Published var replyToStatus: Status?
   @Published var embededStatus: Status?
+  var canPost: Bool {
+    statusText.length > 0 || !selectedMedias.isEmpty
+  }
   
   @Published var visibility: Models.Visibility = .pub
   
@@ -146,7 +149,7 @@ public class StatusEditorViewModel: ObservableObject {
     statusText.addAttributes([.foregroundColor: UIColor(Color.label)],
                                 range: NSMakeRange(0, statusText.string.utf16.count))
     let hashtagPattern = "(#+[a-zA-Z0-9(_)]{1,})"
-    let mentionPattern = "(@+[a-zA-Z0-9(_).]{1,})"
+    let mentionPattern = "(@+[a-zA-Z0-9(_).-]{1,})"
     let urlPattern = "(?i)https?://(?:www\\.)?\\S+(?:/|\\b)"
 
     do {
@@ -329,6 +332,11 @@ public class StatusEditorViewModel: ObservableObject {
    
   private func uploadMedia(data: Data) async throws -> MediaAttachement? {
     guard let client else { return nil }
-    return try await client.mediaUpload(mimeType: "image/jpeg", data: data)
+    return try await client.mediaUpload(endpoint: Media.medias,
+                                        version: .v2,
+                                        method: "POST",
+                                        mimeType: "image/jpeg",
+                                        filename: "file",
+                                        data: data)
   }
 }

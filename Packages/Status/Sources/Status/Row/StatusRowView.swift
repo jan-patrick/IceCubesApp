@@ -7,6 +7,7 @@ import Shimmer
 
 public struct StatusRowView: View {
   @Environment(\.redactionReasons) private var reasons
+  @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var account: CurrentAccount
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var client: Client
@@ -44,7 +45,7 @@ public struct StatusRowView: View {
           statusView
           if !viewModel.isCompact && !viewModel.isRemote, theme.statusActionsDisplay != .none {
             StatusActionsView(viewModel: viewModel)
-              .padding(.vertical, 8)
+              .padding(.top, 8)
               .tint(viewModel.isFocused ? theme.tintColor : .gray)
               .contentShape(Rectangle())
               .onTapGesture {
@@ -59,6 +60,9 @@ public struct StatusRowView: View {
           Task {
             await viewModel.loadEmbededStatus()
           }
+        }
+        if preferences.serverPreferences?.autoExpandSpoilers == true {
+          viewModel.displaySpoiler = false
         }
       }
       .contextMenu {
@@ -148,13 +152,18 @@ public struct StatusRowView: View {
             menuButton
           }
         }
-        makeStatusContentView(status: status)      }
+        makeStatusContentView(status: status)
+          .contentShape(Rectangle())
+          .onTapGesture {
+            viewModel.navigateToDetail(routeurPath: routeurPath)
+          }
+      }
     }
   }
   
   private func makeStatusContentView(status: AnyStatus) -> some View {
     Group {
-      if !viewModel.status.spoilerText.isEmpty {
+      if !status.spoilerText.isEmpty {
         Text(status.spoilerText)
           .font(.body)
         Button {
@@ -167,11 +176,14 @@ public struct StatusRowView: View {
         .buttonStyle(.bordered)
       }
       if !viewModel.displaySpoiler {
-        Text(status.content.asSafeAttributedString)
-          .font(.body)
-          .environment(\.openURL, OpenURLAction { url in
-            routeurPath.handleStatus(status: status, url: url)
-          })
+        HStack {
+          Text(status.content.asSafeAttributedString)
+            .font(.body)
+            .environment(\.openURL, OpenURLAction { url in
+              routeurPath.handleStatus(status: status, url: url)
+            })
+          Spacer()
+        }
         
         if !reasons.contains(.placeholder) {
           if !viewModel.isCompact, !viewModel.isEmbedLoading, let embed = viewModel.embededStatus {
@@ -188,17 +200,29 @@ public struct StatusRowView: View {
         }
         
         if !status.mediaAttachments.isEmpty {
-          StatusMediaPreviewView(attachements: status.mediaAttachments, isCompact: viewModel.isCompact)
+          if theme.statusDisplayStyle == .compact {
+            HStack {
+              StatusMediaPreviewView(attachements: status.mediaAttachments,
+                                     sensitive: status.sensitive,
+                                     isNotifications: viewModel.isCompact)
+              Spacer()
+            }
             .padding(.vertical, 4)
+          } else {
+            StatusMediaPreviewView(attachements: status.mediaAttachments,
+                                   sensitive: status.sensitive,
+                                   isNotifications: viewModel.isCompact)
+            .padding(.vertical, 4)
+          }
         }
-        if let card = status.card, viewModel.embededStatus?.url != status.card?.url, !viewModel.isEmbedLoading {
+        if let card = status.card,
+           viewModel.embededStatus?.url != status.card?.url,
+           status.mediaAttachments.isEmpty,
+           !viewModel.isEmbedLoading,
+           theme.statusDisplayStyle == .large {
           StatusCardView(card: card)
         }
       }
-    }
-    .contentShape(Rectangle())
-    .onTapGesture {
-      viewModel.navigateToDetail(routeurPath: routeurPath)
     }
   }
   

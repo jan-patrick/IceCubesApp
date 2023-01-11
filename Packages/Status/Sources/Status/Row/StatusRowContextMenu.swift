@@ -5,6 +5,9 @@ import Env
 struct StatusRowContextMenu: View {
   @EnvironmentObject private var account: CurrentAccount
   @EnvironmentObject private var routeurPath: RouterPath
+    
+  @Environment(\.openURL) var openURL
+    
   @ObservedObject var viewModel: StatusRowViewModel
   
   var body: some View {
@@ -27,7 +30,21 @@ struct StatusRowContextMenu: View {
       } } label: {
         Label(viewModel.isReblogged ? "Unboost" : "Boost", systemImage: "arrow.left.arrow.right.circle")
       }
-      
+      Button { Task {
+        if viewModel.isBookmarked {
+          await viewModel.unbookmark()
+        } else {
+          await viewModel.bookmark()
+        }
+      } } label: {
+        Label(viewModel.isReblogged ? "Unbookmark" : "Bookmark",
+              systemImage: "bookmark")
+      }
+      Button {
+        routeurPath.presentedSheet = .replyToStatusEditor(status: viewModel.status)
+      } label: {
+        Label("Reply", systemImage: "arrowshape.turn.up.left")
+      }
     }
     
     if viewModel.status.visibility == .pub, !viewModel.isRemote {
@@ -38,6 +55,8 @@ struct StatusRowContextMenu: View {
       }
     }
       
+    Divider()
+    
     if let url = viewModel.status.reblog?.url ?? viewModel.status.url {
         ShareLink(item: url) {
             Label("Share this post", systemImage: "square.and.arrow.up")
@@ -45,9 +64,15 @@ struct StatusRowContextMenu: View {
     }
       
     if let url = viewModel.status.reblog?.url ?? viewModel.status.url {
-      Button { UIApplication.shared.open(url)  } label: {
+      Button { openURL(url) } label: {
         Label("View in Browser", systemImage: "safari")
       }
+    }
+    
+    Button {
+      UIPasteboard.general.string = viewModel.status.content.asRawText
+    } label: {
+      Label("Copy Text", systemImage: "doc.on.doc")
     }
 
     if account.account?.id == viewModel.status.account.id {

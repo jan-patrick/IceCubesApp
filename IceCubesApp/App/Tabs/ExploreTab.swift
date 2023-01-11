@@ -7,6 +7,7 @@ import Env
 import Network
 
 struct ExploreTab: View {
+  @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var currentAccount: CurrentAccount
   @EnvironmentObject private var client: Client
   @StateObject private var routeurPath = RouterPath()
@@ -18,12 +19,14 @@ struct ExploreTab: View {
         .withAppRouteur()
         .withSheetDestinations(sheetDestinations: $routeurPath.presentedSheet)
         .toolbar {
-          statusEditorToolbarItem(routeurPath: routeurPath, visibility: .pub)
+          statusEditorToolbarItem(routeurPath: routeurPath,
+                                  visibility: preferences.serverPreferences?.postVisibility ?? .pub)
           ToolbarItem(placement: .navigationBarLeading) {
             AppAccountsSelectorView(routeurPath: routeurPath)
           }
         }
     }
+    .withSafariRouteur()
     .environmentObject(routeurPath)
     .onChange(of: $popToRootTab.wrappedValue) { popToRootTab in
       if popToRootTab == .explore {
