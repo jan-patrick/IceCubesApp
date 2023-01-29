@@ -1,140 +1,86 @@
-import Foundation
-import UserNotifications
-import SwiftUI
-import KeychainSwift
 import CryptoKit
+import Foundation
+import KeychainSwift
 import Models
 import Network
+import SwiftUI
+import UserNotifications
+
+public struct PushAccount {
+  public let server: String
+  public let token: OauthToken
+  public let accountName: String?
+
+  public init(server: String, token: OauthToken, accountName: String?) {
+    self.server = server
+    self.token = token
+    self.accountName = accountName
+  }
+}
 
 @MainActor
 public class PushNotificationsService: ObservableObject {
   enum Constants {
     static let endpoint = "https://icecubesrelay.fly.dev"
-    static let keychainGroup = "346J38YKE3.com.thomasricouard.IceCubesApp"
     static let keychainAuthKey = "notifications_auth_key"
     static let keychainPrivateKey = "notifications_private_key"
   }
-  
-  public struct PushAccounts {
-    public let server: String
-    public let token: OauthToken
-    
-    public init(server: String, token: OauthToken) {
-      self.server = server
-      self.token = token
-    }
-  }
-  
+
   public static let shared = PushNotificationsService()
-  
+
+  public private(set) var subscriptions: [PushNotificationSubscriptionSettings] = []
+
   @Published public var pushToken: Data?
-  
-  @AppStorage("user_push_is_on") public var isUserPushEnabled: Bool = true
-  @Published public var isPushEnabled: Bool = false {
-    didSet {
-      if !oldValue && isPushEnabled {
-        requestPushNotifications()
-      }
-    }
-  }
-  @Published public var isFollowNotificationEnabled: Bool = true
-  @Published public var isFavoriteNotificationEnabled: Bool = true
-  @Published public var isReblogNotificationEnabled: Bool = true
-  @Published public var isMentionNotificationEnabled: Bool = true
-  @Published public var isPollNotificationEnabled: Bool = true
-  @Published public var isNewPostsNotificationEnabled: Bool = true
-  
-  private var subscriptions: [PushSubscription] = []
-  
+
   private var keychain: KeychainSwift {
     let keychain = KeychainSwift()
-    #if !DEBUG
-      keychain.accessGroup = Constants.keychainGroup
+    #if !DEBUG && !targetEnvironment(simulator)
+      keychain.accessGroup = AppInfo.keychainGroup
     #endif
     return keychain
   }
-  
+
   public func requestPushNotifications() {
-    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { (_, _) in
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
       DispatchQueue.main.async {
         UIApplication.shared.registerForRemoteNotifications()
       }
     }
   }
-  
-  public func fetchSubscriptions(accounts: [PushAccounts]) async {
+
+  public func setAccounts(accounts: [PushAccount]) {
     subscriptions = []
     for account in accounts {
-      let client = Client(server: account.server, oauthToken: account.token)
-      do {
-        let sub: PushSubscription = try await client.get(endpoint: Push.subscription)
-        subscriptions.append(sub)
-      } catch { }
-    }
-    refreshSubscriptionsUI()
-  }
-  
-  public func updateSubscriptions(accounts: [PushAccounts]) async {
-    subscriptions = []
-    let key = notificationsPrivateKeyAsKey.publicKey.x963Representation
-    let authKey = notificationsAuthKeyAsKey
-    guard let pushToken = pushToken, isUserPushEnabled else { return }
-    for account in accounts {
-      let client = Client(server: account.server, oauthToken: account.token)
-        do {
-          var listenerURL = Constants.endpoint
-          listenerURL += "/push/"
-          listenerURL += pushToken.hexString
-          listenerURL += "/\(account.server)"
-          #if DEBUG
-            listenerURL += "?sandbox=true"
-          #endif
-          let sub: PushSubscription =
-          try await client.post(endpoint: Push.createSub(endpoint: listenerURL,
-                                                         p256dh: key,
-                                                         auth: authKey,
-                                                         mentions: isMentionNotificationEnabled,
-                                                         status: isNewPostsNotificationEnabled,
-                                                         reblog: isReblogNotificationEnabled,
-                                                         follow: isFollowNotificationEnabled,
-                                                         favourite: isFavoriteNotificationEnabled,
-                                                         poll: isPollNotificationEnabled))
-          subscriptions.append(sub)
-        } catch { }
-      }
-    refreshSubscriptionsUI()
-  }
-  
-  public func deleteSubscriptions(accounts: [PushAccounts]) async {
-    for account in accounts {
-      let client = Client(server: account.server, oauthToken: account.token)
-      do {
-        _ = try await client.delete(endpoint: Push.subscription)
-      } catch { }
-    }
-    await fetchSubscriptions(accounts: accounts)
-    refreshSubscriptionsUI()
-  }
-  
-  private func refreshSubscriptionsUI() {
-    if let sub = subscriptions.first {
-      isPushEnabled = true
-      isFollowNotificationEnabled = sub.alerts.follow
-      isFavoriteNotificationEnabled = sub.alerts.favourite
-      isReblogNotificationEnabled = sub.alerts.reblog
-      isMentionNotificationEnabled = sub.alerts.mention
-      isPollNotificationEnabled = sub.alerts.poll
-      isNewPostsNotificationEnabled = sub.alerts.status
-    } else {
-      isPushEnabled = false
+      let sub = PushNotificationSubscriptionSettings(account: account,
+                                                     key: notificationsPrivateKeyAsKey.publicKey.x963Representation,
+                                                     authKey: notificationsAuthKeyAsKey,
+                                                     pushToken: pushToken)
+      subscriptions.append(sub)
     }
   }
-  
+
+  public func updateSubscriptions(forceCreate: Bool) async {
+    for subscription in subscriptions {
+      await withTaskGroup(of: Void.self, body: { group in
+        group.addTask {
+          await subscription.fetchSubscription()
+          if await subscription.subscription != nil, !forceCreate {
+            await subscription.deleteSubscription()
+            await subscription.updateSubscription()
+          } else if forceCreate {
+            await subscription.updateSubscription()
+          }
+        }
+      })
+    }
+  }
+
   // MARK: - Key management
-  
+
   public var notificationsPrivateKeyAsKey: P256.KeyAgreement.PrivateKey {
     if let key = keychain.get(Constants.keychainPrivateKey),
-       let data = Data(base64Encoded: key) {
+       let data = Data(base64Encoded: key)
+    {
       do {
         return try P256.KeyAgreement.PrivateKey(rawRepresentation: data)
       } catch {
@@ -152,21 +98,22 @@ public class PushNotificationsService: ObservableObject {
       return key
     }
   }
-  
+
   public var notificationsAuthKeyAsKey: Data {
     if let key = keychain.get(Constants.keychainAuthKey),
-       let data = Data(base64Encoded: key) {
+       let data = Data(base64Encoded: key)
+    {
       return data
     } else {
-      let key = Self.makeRandomeNotificationsAuthKey()
+      let key = Self.makeRandomNotificationsAuthKey()
       keychain.set(key.base64EncodedString(),
                    forKey: Constants.keychainAuthKey,
                    withAccess: .accessibleAfterFirstUnlock)
       return key
     }
   }
-      
-  static private func makeRandomeNotificationsAuthKey() -> Data {
+
+  private static func makeRandomNotificationsAuthKey() -> Data {
     let byteCount = 16
     var bytes = Data(count: byteCount)
     _ = bytes.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, byteCount, $0.baseAddress!) }
@@ -180,3 +127,95 @@ extension Data {
   }
 }
 
+@MainActor
+public class PushNotificationSubscriptionSettings: ObservableObject {
+  @Published public var isEnabled: Bool = true
+  @Published public var isFollowNotificationEnabled: Bool = true
+  @Published public var isFavoriteNotificationEnabled: Bool = true
+  @Published public var isReblogNotificationEnabled: Bool = true
+  @Published public var isMentionNotificationEnabled: Bool = true
+  @Published public var isPollNotificationEnabled: Bool = true
+  @Published public var isNewPostsNotificationEnabled: Bool = true
+
+  public let account: PushAccount
+
+  private let key: Data
+  private let authKey: Data
+
+  public var pushToken: Data?
+
+  public private(set) var subscription: PushSubscription?
+
+  public init(account: PushAccount, key: Data, authKey: Data, pushToken: Data?) {
+    self.account = account
+    self.key = key
+    self.authKey = authKey
+    self.pushToken = pushToken
+  }
+
+  private func refreshSubscriptionsUI() {
+    if let subscription {
+      isFollowNotificationEnabled = subscription.alerts.follow
+      isFavoriteNotificationEnabled = subscription.alerts.favourite
+      isReblogNotificationEnabled = subscription.alerts.reblog
+      isMentionNotificationEnabled = subscription.alerts.mention
+      isPollNotificationEnabled = subscription.alerts.poll
+      isNewPostsNotificationEnabled = subscription.alerts.status
+    }
+  }
+
+  public func updateSubscription() async {
+    guard let pushToken = pushToken else { return }
+    let client = Client(server: account.server, oauthToken: account.token)
+    do {
+      var listenerURL = PushNotificationsService.Constants.endpoint
+      listenerURL += "/push/"
+      listenerURL += pushToken.hexString
+      listenerURL += "/\(account.accountName ?? account.server)"
+      #if DEBUG
+        listenerURL += "?sandbox=true"
+      #endif
+      subscription =
+        try await client.post(endpoint: Push.createSub(endpoint: listenerURL,
+                                                       p256dh: key,
+                                                       auth: authKey,
+                                                       mentions: isMentionNotificationEnabled,
+                                                       status: isNewPostsNotificationEnabled,
+                                                       reblog: isReblogNotificationEnabled,
+                                                       follow: isFollowNotificationEnabled,
+                                                       favorite: isFavoriteNotificationEnabled,
+                                                       poll: isPollNotificationEnabled))
+      isEnabled = subscription != nil
+
+    } catch {
+      isEnabled = false
+    }
+    refreshSubscriptionsUI()
+  }
+
+  public func deleteSubscription() async {
+    let client = Client(server: account.server, oauthToken: account.token)
+    do {
+      _ = try await client.delete(endpoint: Push.subscription)
+      subscription = nil
+      await fetchSubscription()
+      refreshSubscriptionsUI()
+      while subscription != nil {
+        await deleteSubscription()
+      }
+      isEnabled = false
+    } catch {}
+  }
+
+  public func fetchSubscription() async {
+    let client = Client(server: account.server, oauthToken: account.token)
+    do {
+      subscription = try await client.get(endpoint: Push.subscription)
+      isEnabled = subscription != nil
+    } catch {
+      subscription = nil
+      isEnabled = false
+    }
+    refreshSubscriptionsUI()
+  }
+}

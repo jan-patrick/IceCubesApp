@@ -1,29 +1,32 @@
+import DesignSystem
+import Env
 import Models
 import Network
 import SwiftUI
-import Env
-import DesignSystem
 
 public struct StatusPollView: View {
-  enum Constants {
-    static let barHeight: CGFloat = 30
-  }
-  
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var client: Client
   @EnvironmentObject private var currentInstance: CurrentInstance
+  @EnvironmentObject private var currentAccount: CurrentAccount
   @StateObject private var viewModel: StatusPollViewModel
-  
-  public init(poll: Poll) {
+
+  private var status: AnyStatus
+
+  public init(poll: Poll, status: AnyStatus) {
     _viewModel = StateObject(wrappedValue: .init(poll: poll))
+    self.status = status
   }
-  
+
   private func widthForOption(option: Poll.Option, proxy: GeometryProxy) -> CGFloat {
+    if viewModel.poll.votesCount == 0 {
+      return 0
+    }
     let totalWidth = proxy.frame(in: .local).width
     let ratio = CGFloat(option.votesCount) / CGFloat(viewModel.poll.votesCount)
     return totalWidth * ratio
   }
-  
+
   private func percentForOption(option: Poll.Option) -> Int {
     let ratio = (Float(option.votesCount) / Float(viewModel.poll.votesCount)) * 100
     if ratio.isNaN {
@@ -31,23 +34,23 @@ public struct StatusPollView: View {
     }
     return Int(round(ratio))
   }
-  
+
   private func isSelected(option: Poll.Option) -> Bool {
     for vote in viewModel.votes {
       return viewModel.poll.options.firstIndex(where: { $0.id == option.id }) == vote
     }
     return false
   }
-  
+
   public var body: some View {
     VStack(alignment: .leading) {
       ForEach(viewModel.poll.options) { option in
         HStack {
           makeBarView(for: option)
-          if !viewModel.votes.isEmpty || viewModel.poll.expired {
+          if !viewModel.votes.isEmpty || viewModel.poll.expired || status.account.id == currentAccount.account?.id {
             Spacer()
-            Text("\(percentForOption(option: option)) %")
-              .font(.subheadline)
+            Text("\(percentForOption(option: option))%")
+              .font(.scaledSubheadline)
               .frame(width: 40)
           }
         }
@@ -62,29 +65,30 @@ public struct StatusPollView: View {
       }
     }
   }
-  
+
   private var footerView: some View {
     HStack(spacing: 0) {
-      Text("\(viewModel.poll.votesCount) votes")
+      Text("status.poll.n-votes \(viewModel.poll.votesCount)")
       Text(" ⸱ ")
       if viewModel.poll.expired {
-        Text("Closed")
-      } else {
-        Text("Close in ")
-        Text(viewModel.poll.expiresAt.asDate, style: .timer)
+        Text("status.poll.closed")
+      } else if let date = viewModel.poll.expiresAt.value?.asDate {
+        Text("status.poll.closes-in")
+        Text(date, style: .timer)
       }
     }
-    .font(.footnote)
+    .font(.scaledFootnote)
     .foregroundColor(.gray)
   }
-  
+
   @ViewBuilder
   private func makeBarView(for option: Poll.Option) -> some View {
     let isSelected = isSelected(option: option)
     Button {
       if !viewModel.poll.expired,
          viewModel.votes.isEmpty,
-         let index = viewModel.poll.options.firstIndex(where: { $0.id == option.id }) {
+         let index = viewModel.poll.options.firstIndex(where: { $0.id == option.id })
+      {
         withAnimation {
           viewModel.votes.append(index)
           Task {
@@ -97,21 +101,23 @@ public struct StatusPollView: View {
         ZStack(alignment: .leading) {
           Rectangle()
             .background {
-              if viewModel.showResults {
+              if viewModel.showResults || status.account.id == currentAccount.account?.id {
                 HStack {
                   let width = widthForOption(option: option, proxy: proxy)
                   Rectangle()
                     .foregroundColor(theme.tintColor)
-                    .frame(height: Constants.barHeight)
+                    .frame(height: .pollBarHeight)
                     .frame(width: width)
-                  Spacer()
+                  if width != proxy.size.width {
+                    Spacer()
+                  }
                 }
               }
             }
             .foregroundColor(theme.tintColor.opacity(0.40))
-            .frame(height: Constants.barHeight)
+            .frame(height: .pollBarHeight)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-          
+
           HStack {
             if isSelected {
               Image(systemName: "checkmark.circle.fill")
@@ -119,12 +125,13 @@ public struct StatusPollView: View {
             }
             Text(option.title)
               .foregroundColor(.white)
-              .font(.body)
+              .font(.scaledBody)
+              .minimumScaleFactor(0.7)
           }
           .padding(.leading, 12)
         }
       }
-      .frame(height: Constants.barHeight)
+      .frame(height: .pollBarHeight)
     }
   }
 }

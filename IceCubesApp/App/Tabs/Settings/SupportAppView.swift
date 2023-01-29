@@ -1,52 +1,56 @@
-import SwiftUI
-import Env
 import DesignSystem
+import Env
 import RevenueCat
 import Shimmer
+import SwiftUI
 
 struct SupportAppView: View {
   enum Tips: String, CaseIterable {
-    case one, two, three
-    
+    case one, two, three, four
+
     init(productId: String) {
       self = .init(rawValue: String(productId.split(separator: ".")[2]))!
     }
-    
+
     var productId: String {
       "icecubes.tipjar.\(rawValue)"
     }
-    
-    var title: String {
+
+    var title: LocalizedStringKey {
       switch self {
       case .one:
-        return "🍬 Small Tip"
+        return "settings.support.one.title"
       case .two:
-        return "☕️ Nice Tip"
+        return "settings.support.two.title"
       case .three:
-        return "🤯 Generous Tip"
+        return "settings.support.three.title"
+      case .four:
+        return "settings.support.four.title"
       }
     }
-    
-    var subtitle: String {
+
+    var subtitle: LocalizedStringKey {
       switch self {
       case .one:
-        return "Small, but cute, and it taste good!"
+        return "settings.support.one.subtitle"
       case .two:
-        return "I love the taste of a fancy coffee ❤️"
+        return "settings.support.two.subtitle"
       case .three:
-        return "You're insane, thank you so much!"
+        return "settings.support.three.subtitle"
+      case .four:
+        return "settings.support.four.subtitle"
       }
     }
   }
-  
+
   @EnvironmentObject private var theme: Theme
-  
+
   @State private var loadingProducts: Bool = false
   @State private var products: [StoreProduct] = []
   @State private var isProcessingPurchase: Bool = false
   @State private var purchaseSuccessDisplayed: Bool = false
   @State private var purchaseErrorDisplayed: Bool = false
-  
+
   var body: some View {
     Form {
       Section {
@@ -61,19 +65,19 @@ struct SupportAppView: View {
               .frame(width: 50, height: 50)
               .cornerRadius(4)
           }
-          Text("Hi there! My name is Thomas and I absolutely love creating open source apps. Ice Cubes is definitely one of my proudest projects to date - and let's be real, it's also the one that requires the most maintenance due to the ever-changing world of Mastodon and social media. If you're having a blast using Ice Cubes, consider tossing a little tip my way. It'll make my day (and help keep the app running smoothly for you). 🚀")
+          Text("settings.support.message-from-dev")
         }
       }
       .listRowBackground(theme.primaryBackgroundColor)
-      
+
       Section {
         if loadingProducts {
           HStack {
             VStack(alignment: .leading) {
-              Text("Loading ...")
-                .font(.subheadline)
-              Text("Loading subtitle...")
-                .font(.footnote)
+              Text("placeholder.loading.short.")
+                .font(.scaledSubheadline)
+              Text("settings.support.placeholder.loading-subtitle")
+                .font(.scaledFootnote)
                 .foregroundColor(.gray)
             }
             .padding(.vertical, 8)
@@ -86,22 +90,26 @@ struct SupportAppView: View {
             HStack {
               VStack(alignment: .leading) {
                 Text(tip.title)
-                  .font(.subheadline)
+                  .font(.scaledSubheadline)
                 Text(tip.subtitle)
-                  .font(.footnote)
+                  .font(.scaledFootnote)
                   .foregroundColor(.gray)
               }
               Spacer()
               Button {
-                isProcessingPurchase = true
-                Task {
-                  do {
-                    _ = try await Purchases.shared.purchase(product: product)
-                    purchaseSuccessDisplayed = true
-                  } catch {
-                    purchaseErrorDisplayed = true
+                if !isProcessingPurchase {
+                  isProcessingPurchase = true
+                  Task {
+                    do {
+                      let result = try await Purchases.shared.purchase(product: product)
+                      if !result.userCancelled {
+                        purchaseSuccessDisplayed = true
+                      }
+                    } catch {
+                      purchaseErrorDisplayed = true
+                    }
+                    isProcessingPurchase = false
                   }
-                  isProcessingPurchase = false
                 }
               } label: {
                 if isProcessingPurchase {
@@ -118,22 +126,22 @@ struct SupportAppView: View {
       }
       .listRowBackground(theme.primaryBackgroundColor)
     }
-    .navigationTitle("Support Ice Cubes")
+    .navigationTitle("settings.support.navigation-title")
     .scrollContentBackground(.hidden)
     .background(theme.secondaryBackgroundColor)
-    .alert("Thanks!", isPresented: $purchaseSuccessDisplayed, actions: {
-      Button { purchaseSuccessDisplayed = false } label: { Text("Ok") }
+    .alert("settings.support.alert.title", isPresented: $purchaseSuccessDisplayed, actions: {
+      Button { purchaseSuccessDisplayed = false } label: { Text("alert.button.ok") }
     }, message: {
-      Text("Thanks you so much for your tip! It's greatly appreciated!")
+      Text("settings.support.alert.message")
     })
-    .alert("Error!", isPresented: $purchaseErrorDisplayed, actions: {
-      Button { purchaseErrorDisplayed = false } label: { Text("Ok") }
+    .alert("alert.error", isPresented: $purchaseErrorDisplayed, actions: {
+      Button { purchaseErrorDisplayed = false } label: { Text("alert.button.ok") }
     }, message: {
-      Text("Error processing your in app purchase, please try again.")
+      Text("settings.support.alert.error.message")
     })
     .onAppear {
       loadingProducts = true
-      Purchases.shared.getProducts(Tips.allCases.map{ $0.productId }) { products in
+      Purchases.shared.getProducts(Tips.allCases.map { $0.productId }) { products in
         self.products = products.sorted(by: { $0.price < $1.price })
         withAnimation {
           loadingProducts = false

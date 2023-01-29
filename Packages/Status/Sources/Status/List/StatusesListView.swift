@@ -1,17 +1,17 @@
-import SwiftUI
+import DesignSystem
 import Models
 import Shimmer
-import DesignSystem
+import SwiftUI
 
 public struct StatusesListView<Fetcher>: View where Fetcher: StatusesFetcher {
   @ObservedObject private var fetcher: Fetcher
   private let isRemote: Bool
-  
+
   public init(fetcher: Fetcher, isRemote: Bool = false) {
     self.fetcher = fetcher
     self.isRemote = isRemote
   }
-  
+
   public var body: some View {
     Group {
       switch fetcher.statusesState {
@@ -25,23 +25,26 @@ public struct StatusesListView<Fetcher>: View where Fetcher: StatusesFetcher {
             .padding(.vertical, .dividerPadding)
         }
       case .error:
-        ErrorView(title: "An error occured",
-                  message: "An error occured while loading posts, please try again.",
-                  buttonTitle: "Retry") {
+        ErrorView(title: "status.error.title",
+                  message: "status.error.loading.message",
+                  buttonTitle: "action.retry") {
           Task {
             await fetcher.fetchStatuses()
           }
         }
-        
+
       case let .display(statuses, nextPageState):
         ForEach(statuses, id: \.viewId) { status in
-          StatusRowView(viewModel: .init(status: status, isCompact: false, isRemote: isRemote))
-            .id(status.id)
-            .padding(.horizontal, .layoutPadding)
-          Divider()
-            .padding(.vertical, .dividerPadding)
+          let viewModel = StatusRowViewModel(status: status, isCompact: false, isRemote: isRemote)
+          if viewModel.filter?.filter.filterAction != .hide {
+            StatusRowView(viewModel: viewModel)
+              .id(status.id)
+              .padding(.horizontal, .layoutPadding)
+            Divider()
+              .padding(.vertical, .dividerPadding)
+          }
         }
-        
+
         switch nextPageState {
         case .hasNextPage:
           loadingRow
@@ -59,7 +62,7 @@ public struct StatusesListView<Fetcher>: View where Fetcher: StatusesFetcher {
     }
     .frame(maxWidth: .maxColumnWidth)
   }
-  
+
   private var loadingRow: some View {
     HStack {
       Spacer()

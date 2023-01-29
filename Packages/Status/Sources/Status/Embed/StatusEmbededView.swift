@@ -1,22 +1,23 @@
-import SwiftUI
-import Models
 import DesignSystem
+import EmojiText
+import Models
+import SwiftUI
 
 @MainActor
-public struct StatusEmbededView: View {
+public struct StatusEmbeddedView: View {
   @EnvironmentObject private var theme: Theme
-  
+
   public let status: Status
-  
+
   public init(status: Status) {
     self.status = status
   }
-  
+
   public var body: some View {
     HStack {
       VStack(alignment: .leading) {
         makeAccountView(account: status.reblog?.account ?? status.account)
-        StatusRowView(viewModel: .init(status: status, isCompact: true))
+        StatusRowView(viewModel: .init(status: status, isCompact: true, showActions: false))
       }
       Spacer()
     }
@@ -29,20 +30,20 @@ public struct StatusEmbededView: View {
     )
     .padding(.top, 8)
   }
-  
+
   private func makeAccountView(account: Account) -> some View {
     HStack(alignment: .center) {
       AvatarView(url: account.avatar, size: .embed)
       VStack(alignment: .leading, spacing: 0) {
-        status.account.displayNameWithEmojis
-          .font(.footnote)
+        EmojiTextApp(.init(stringValue: account.safeDisplayName), emojis: account.emojis)
+          .font(.scaledFootnote)
           .fontWeight(.semibold)
         Group {
           Text("@\(account.acct)") +
-          Text(" ⸱ ") +
-          Text(status.reblog?.createdAt.formatted ?? status.createdAt.formatted)
+            Text(" ⸱ ") +
+            Text(status.reblog?.createdAt.relativeFormatted ?? status.createdAt.relativeFormatted)
         }
-        .font(.caption)
+        .font(.scaledCaption)
         .foregroundColor(.gray)
       }
     }

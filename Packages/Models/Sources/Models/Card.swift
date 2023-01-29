@@ -1,11 +1,11 @@
 import Foundation
 
-public struct Card: Codable, Identifiable {
+public struct Card: Codable, Identifiable, Equatable, Hashable {
   public var id: String {
-    url.absoluteString
+    url
   }
-  
-  public let url: URL
+
+  public let url: String
   public let title: String?
   public let description: String?
   public let type: String

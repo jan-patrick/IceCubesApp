@@ -5,13 +5,15 @@ import PackageDescription
 
 let package = Package(
   name: "Conversations",
+  defaultLocalization: "en",
   platforms: [
     .iOS(.v16),
   ],
   products: [
     .library(
       name: "Conversations",
-      targets: ["Conversations"]),
+      targets: ["Conversations"]
+    ),
   ],
   dependencies: [
     .package(name: "Models", path: "../Models"),
@@ -27,7 +29,7 @@ let package = Package(
         .product(name: "Network", package: "Network"),
         .product(name: "Env", package: "Env"),
         .product(name: "DesignSystem", package: "DesignSystem"),
-      ]),
+      ]
+    ),
   ]
 )
-

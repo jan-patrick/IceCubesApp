@@ -1,6 +1,7 @@
-import SwiftUI
+import Combine
 import Models
 import Network
+import SwiftUI
 
 @MainActor
 class ExploreViewModel: ObservableObject {
@@ -16,76 +17,64 @@ class ExploreViewModel: ObservableObject {
       }
     }
   }
-  
-  enum Token: String, Identifiable {
-    case user = "@user"
-    case statuses = "@posts"
-    case tag = "#hashtag"
-    
-    var id: String {
-      rawValue
-    }
-    
-    var apiType: String {
-      switch self {
-      case .user:
-        return "accounts"
-      case .tag:
-        return "hashtags"
-      case .statuses:
-        return "statuses"
-      }
-    }
+
+  var allSectionsEmpty: Bool {
+    trendingLinks.isEmpty && trendingTags.isEmpty && trendingStatuses.isEmpty && suggestedAccounts.isEmpty
   }
-  
-  @Published var tokens: [Token] = []
-  @Published var suggestedToken: [Token] = []
+
   @Published var searchQuery = "" {
     didSet {
-      if searchQuery.starts(with: "@") {
-        suggestedToken = [.user, .statuses]
-      } else if searchQuery.starts(with: "#") {
-        suggestedToken = [.tag]
-      } else {
-        suggestedToken = []
-      }
-      search()
+      isSearching = true
     }
   }
+
   @Published var results: [String: SearchResults] = [:]
   @Published var isLoaded = false
+  @Published var isSearching = false
   @Published var suggestedAccounts: [Account] = []
-  @Published var suggestedAccountsRelationShips: [Relationshionship] = []
+  @Published var suggestedAccountsRelationShips: [Relationship] = []
   @Published var trendingTags: [Tag] = []
   @Published var trendingStatuses: [Status] = []
   @Published var trendingLinks: [Card] = []
-  
+
   private var searchTask: Task<Void, Never>?
-  
+  private var cancellables = Set<AnyCancellable>()
+
+  init() {
+    $searchQuery
+      .removeDuplicates()
+      .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+      .sink(receiveValue: { [weak self] _ in
+        self?.search()
+      })
+      .store(in: &cancellables)
+  }
+
   func fetchTrending() async {
     guard let client else { return }
     do {
       let data = try await fetchTrendingsData(client: client)
-      self.suggestedAccounts = data.suggestedAccounts
-      self.trendingTags = data.trendingTags
-      self.trendingStatuses = data.trendingStatuses
-      self.trendingLinks = data.trendingLinks
-      
-      self.suggestedAccountsRelationShips = try await client.get(endpoint: Accounts.relationships(ids: self.suggestedAccounts.map{ $0.id }))
-      
-      isLoaded = true
+      suggestedAccounts = data.suggestedAccounts
+      trendingTags = data.trendingTags
+      trendingStatuses = data.trendingStatuses
+      trendingLinks = data.trendingLinks
+
+      suggestedAccountsRelationShips = try await client.get(endpoint: Accounts.relationships(ids: suggestedAccounts.map { $0.id }))
+      withAnimation {
+        isLoaded = true
+      }
     } catch {
       isLoaded = true
     }
   }
-  
+
   private struct TrendingData {
     let suggestedAccounts: [Account]
     let trendingTags: [Tag]
     let trendingStatuses: [Status]
     let trendingLinks: [Card]
   }
-  
+
   private func fetchTrendingsData(client: Client) async throws -> TrendingData {
     async let suggestedAccounts: [Account] = client.get(endpoint: Accounts.suggestions)
     async let trendingTags: [Tag] = client.get(endpoint: Trends.tags)
@@ -96,25 +85,30 @@ class ExploreViewModel: ObservableObject {
                            trendingStatuses: trendingStatuses,
                            trendingLinks: trendingLinks)
   }
-  
+
   func search() {
     guard !searchQuery.isEmpty else { return }
+    isSearching = true
     searchTask?.cancel()
     searchTask = nil
     searchTask = Task {
       guard let client else { return }
       do {
-        let apiType = tokens.first?.apiType
         var results: SearchResults = try await client.get(endpoint: Search.search(query: searchQuery,
-                                                                                  type: apiType,
+                                                                                  type: nil,
                                                                                   offset: nil,
                                                                                   following: nil),
                                                           forceVersion: .v2)
-        let relationships: [Relationshionship] =
-          try await client.get(endpoint: Accounts.relationships(ids: results.accounts.map{ $0.id }))
+        let relationships: [Relationship] =
+          try await client.get(endpoint: Accounts.relationships(ids: results.accounts.map { $0.id }))
         results.relationships = relationships
-        self.results[searchQuery] = results
-      } catch { }
+        withAnimation {
+          self.results[searchQuery] = results
+          isSearching = false
+        }
+      } catch {
+        isSearching = false
+      }
     }
   }
 }

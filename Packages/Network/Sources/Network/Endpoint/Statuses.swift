@@ -2,50 +2,43 @@ import Foundation
 import Models
 
 public enum Statuses: Endpoint {
-  case postStatus(status: String,
-                  inReplyTo: String?,
-                  mediaIds: [String]?,
-                  spoilerText: String?,
-                  visibility: Visibility)
-  case editStatus(id: String,
-                  status: String,
-                  mediaIds: [String]?,
-                  spoilerText: String?,
-                  visibility: Visibility)
+  case postStatus(json: StatusData)
+  case editStatus(id: String, json: StatusData)
   case status(id: String)
   case context(id: String)
-  case favourite(id: String)
-  case unfavourite(id: String)
+  case favorite(id: String)
+  case unfavorite(id: String)
   case reblog(id: String)
   case unreblog(id: String)
   case rebloggedBy(id: String, maxId: String?)
-  case favouritedBy(id: String, maxId: String?)
+  case favoritedBy(id: String, maxId: String?)
   case pin(id: String)
   case unpin(id: String)
   case bookmark(id: String)
   case unbookmark(id: String)
-  
+  case history(id: String)
+
   public func path() -> String {
     switch self {
     case .postStatus:
       return "statuses"
-    case .status(let id):
+    case let .status(id):
       return "statuses/\(id)"
-    case .editStatus(let id, _, _, _, _):
+    case let .editStatus(id, _):
       return "statuses/\(id)"
-    case .context(let id):
+    case let .context(id):
       return "statuses/\(id)/context"
-    case .favourite(let id):
+    case let .favorite(id):
       return "statuses/\(id)/favourite"
-    case .unfavourite(let id):
+    case let .unfavorite(id):
       return "statuses/\(id)/unfavourite"
-    case .reblog(let id):
+    case let .reblog(id):
       return "statuses/\(id)/reblog"
-    case .unreblog(let id):
+    case let .unreblog(id):
       return "statuses/\(id)/unreblog"
-    case .rebloggedBy(let id, _):
+    case let .rebloggedBy(id, _):
       return "statuses/\(id)/reblogged_by"
-    case .favouritedBy(let id, _):
+    case let .favoritedBy(id, _):
       return "statuses/\(id)/favourited_by"
     case let .pin(id):
       return "statuses/\(id)/pin"
@@ -55,44 +48,69 @@ public enum Statuses: Endpoint {
       return "statuses/\(id)/bookmark"
     case let .unbookmark(id):
       return "statuses/\(id)/unbookmark"
+    case let .history(id):
+      return "statuses/\(id)/history"
     }
   }
-  
+
   public func queryItems() -> [URLQueryItem]? {
     switch self {
-    case let .postStatus(status, inReplyTo, mediaIds, spoilerText, visibility):
-      var params: [URLQueryItem] = [.init(name: "status", value: status),
-                                    .init(name: "visibility", value: visibility.rawValue)]
-      if let inReplyTo {
-        params.append(.init(name: "in_reply_to_id", value: inReplyTo))
-      }
-      if let mediaIds {
-        for mediaId in mediaIds {
-          params.append(.init(name: "media_ids[]", value: mediaId))
-        }
-      }
-      if let spoilerText {
-        params.append(.init(name: "spoiler_text", value: spoilerText))
-      }
-      return params
-    case let .editStatus(_, status, mediaIds, spoilerText, visibility):
-      var params: [URLQueryItem] = [.init(name: "status", value: status),
-                                    .init(name: "visibility", value: visibility.rawValue)]
-      if let mediaIds {
-        for mediaId in mediaIds {
-          params.append(.init(name: "media_ids[]", value: mediaId))
-        }
-      }
-      if let spoilerText {
-        params.append(.init(name: "spoiler_text", value: spoilerText))
-      }
-      return params
     case let .rebloggedBy(_, maxId):
       return makePaginationParam(sinceId: nil, maxId: maxId, mindId: nil)
-    case let .favouritedBy(_, maxId):
+    case let .favoritedBy(_, maxId):
       return makePaginationParam(sinceId: nil, maxId: maxId, mindId: nil)
     default:
       return nil
     }
+  }
+
+  public var jsonValue: Encodable? {
+    switch self {
+    case let .postStatus(json):
+      return json
+    case let .editStatus(_, json):
+      return json
+    default:
+      return nil
+    }
+  }
+}
+
+public struct StatusData: Encodable {
+  public let status: String
+  public let visibility: Visibility
+  public let inReplyToId: String?
+  public let spoilerText: String?
+  public let mediaIds: [String]?
+  public let poll: PollData?
+  public let language: String?
+
+  public struct PollData: Encodable {
+    public let options: [String]
+    public let multiple: Bool
+    public let expires_in: Int
+
+    public init(options: [String], multiple: Bool, expires_in: Int) {
+      self.options = options
+      self.multiple = multiple
+      self.expires_in = expires_in
+    }
+  }
+
+  public init(status: String,
+              visibility: Visibility,
+              inReplyToId: String? = nil,
+              spoilerText: String? = nil,
+              mediaIds: [String]? = nil,
+              poll: PollData? = nil,
+              language: String? = nil)
+  {
+    self.status = status
+    self.visibility = visibility
+    self.inReplyToId = inReplyToId
+    self.spoilerText = spoilerText
+    self.mediaIds = mediaIds
+    self.poll = poll
+    self.language = language
   }
 }

@@ -1,9 +1,9 @@
-import SwiftUI
-import Network
-import Models
-import Shimmer
 import DesignSystem
 import Env
+import Models
+import Network
+import Shimmer
+import SwiftUI
 
 public struct NotificationsListView: View {
   @Environment(\.scenePhase) private var scenePhase
@@ -11,37 +11,39 @@ public struct NotificationsListView: View {
   @EnvironmentObject private var watcher: StreamWatcher
   @EnvironmentObject private var client: Client
   @StateObject private var viewModel = NotificationsViewModel()
-  
-  public init() { }
-  
+
+  let lockedType: Models.Notification.NotificationType?
+
+  public init(lockedType: Models.Notification.NotificationType?) {
+    self.lockedType = lockedType
+  }
+
   public var body: some View {
     ScrollView {
       LazyVStack {
-        Group {
-          notificationsView
-        }
-        .padding(.top, 16)
-        .frame(maxWidth: .maxColumnWidth)
+        notificationsView
+          .frame(maxWidth: .maxColumnWidth)
       }
-      .padding(.horizontal, .layoutPadding)
-      .padding(.top, .layoutPadding)
+      .padding(.top, .layoutPadding + 16)
       .background(theme.primaryBackgroundColor)
     }
-    .navigationTitle(viewModel.selectedType?.menuTitle() ?? "All Notifications")
+    .navigationTitle(lockedType?.menuTitle() ?? viewModel.selectedType?.menuTitle() ?? "notifications.navigation-title")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
-      ToolbarTitleMenu {
-        Button {
-          viewModel.selectedType = nil
-        } label: {
-          Label("All Notifications", systemImage: "bell.fill")
-        }
-        Divider()
-        ForEach(Notification.NotificationType.allCases, id: \.self) { type in
+      if lockedType == nil {
+        ToolbarTitleMenu {
           Button {
-            viewModel.selectedType = type
+            viewModel.selectedType = nil
           } label: {
-            Label(type.menuTitle(), systemImage: type.iconName())
+            Label("notifications.navigation-title", systemImage: "bell.fill")
+          }
+          Divider()
+          ForEach(Notification.NotificationType.allCases, id: \.self) { type in
+            Button {
+              viewModel.selectedType = type
+            } label: {
+              Label(type.menuTitle(), systemImage: type.iconName())
+            }
           }
         }
       }
@@ -50,6 +52,9 @@ public struct NotificationsListView: View {
     .background(theme.primaryBackgroundColor)
     .task {
       viewModel.client = client
+      if let lockedType {
+        viewModel.selectedType = lockedType
+      }
       await viewModel.fetchNotifications()
     }
     .refreshable {
@@ -71,34 +76,40 @@ public struct NotificationsListView: View {
       }
     })
   }
-  
+
   @ViewBuilder
   private var notificationsView: some View {
     switch viewModel.state {
     case .loading:
-      ForEach(Models.Notification.placeholders()) { notification in
+      ForEach(ConsolidatedNotification.placeholders()) { notification in
         NotificationRowView(notification: notification)
           .redacted(reason: .placeholder)
+          .padding(.leading, .layoutPadding + 4)
+          .padding(.trailing, .layoutPadding)
+          .padding(.top, 6)
+          .padding(.bottom, 2)
           .shimmering()
         Divider()
           .padding(.vertical, .dividerPadding)
       }
-      
+
     case let .display(notifications, nextPageState):
       if notifications.isEmpty {
         EmptyView(iconName: "bell.slash",
-                  title: "No notifications",
-                  message: "Notifications? What notifications? Your notification inbox is looking so empty. Keep on being awesome! 📱😎")
+                  title: "notifications.empty.title",
+                  message: "notifications.empty.message")
       } else {
         ForEach(notifications) { notification in
-            if notification.supportedType != nil {
-                NotificationRowView(notification: notification)
-                Divider()
-                    .padding(.vertical, .dividerPadding)
-            }
+          NotificationRowView(notification: notification)
+            .padding(.leading, .layoutPadding + 4)
+            .padding(.trailing, .layoutPadding)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+          Divider()
+            .padding(.vertical, .dividerPadding)
         }
       }
-      
+
       switch nextPageState {
       case .none:
         EmptyView()
@@ -112,18 +123,18 @@ public struct NotificationsListView: View {
       case .loadingNextPage:
         loadingRow
       }
-      
+
     case .error:
-      ErrorView(title: "An error occured",
-                message: "An error occured while loading your notifications, please retry.",
-                buttonTitle: "Retry") {
+      ErrorView(title: "notifications.error.title",
+                message: "notifications.error.message",
+                buttonTitle: "action.retry") {
         Task {
           await viewModel.fetchNotifications()
         }
       }
     }
   }
-  
+
   private var loadingRow: some View {
     HStack {
       Spacer()

@@ -1,30 +1,30 @@
+import Env
 import Models
 import SwiftUI
-import Env
 
 public struct TagRowView: View {
-  @EnvironmentObject private var routeurPath: RouterPath
-  
+  @EnvironmentObject private var routerPath: RouterPath
+
   let tag: Tag
-  
+
   public init(tag: Tag) {
     self.tag = tag
   }
-  
+
   public var body: some View {
     HStack {
       VStack(alignment: .leading) {
         Text("#\(tag.name)")
-          .font(.headline)
-        Text("\(tag.totalUses) posts from \(tag.totalAccounts) participants")
-          .font(.footnote)
+          .font(.scaledHeadline)
+        Text("design.tag.n-posts-from-n-participants \(tag.totalUses) \(tag.totalAccounts)")
+          .font(.scaledFootnote)
           .foregroundColor(.gray)
       }
       Spacer()
     }
     .contentShape(Rectangle())
     .onTapGesture {
-      routeurPath.navigate(to: .hashTag(tag: tag.name, account: nil))
+      routerPath.navigate(to: .hashTag(tag: tag.name, account: nil))
     }
   }
 }

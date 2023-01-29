@@ -1,25 +1,26 @@
 import Foundation
 import Models
 import Network
+import SwiftUI
 
 public enum TimelineFilter: Hashable, Equatable {
   case home, local, federated, trending
   case hashtag(tag: String, accountId: String?)
-  case list(list: List)
+  case list(list: Models.List)
   case remoteLocal(server: String)
-  
+
   public func hash(into hasher: inout Hasher) {
-    hasher.combine(title())
+    hasher.combine(title)
   }
-  
+
   public static func availableTimeline(client: Client) -> [TimelineFilter] {
     if !client.isAuth {
       return [.local, .federated, .trending]
     }
     return [.home, .local, .federated, .trending]
   }
-  
-  public func title() -> String {
+
+  public var title: String {
     switch self {
     case .federated:
       return "Federated"
@@ -37,18 +38,37 @@ public enum TimelineFilter: Hashable, Equatable {
       return server
     }
   }
-  
+
+  public func localizedTitle() -> LocalizedStringKey {
+    switch self {
+    case .federated:
+      return "timeline.federated"
+    case .local:
+      return "timeline.local"
+    case .trending:
+      return "timeline.trending"
+    case .home:
+      return "timeline.home"
+    case let .hashtag(tag, _):
+      return "#\(tag)"
+    case let .list(list):
+      return LocalizedStringKey(list.title)
+    case let .remoteLocal(server):
+      return LocalizedStringKey(server)
+    }
+  }
+
   public func iconName() -> String? {
     switch self {
     case .federated:
       return "globe.americas"
     case .local:
-      return "person.3"
+      return "person.2"
     case .trending:
       return "chart.line.uptrend.xyaxis"
     case .home:
       return "house"
-    case .list(_):
+    case .list:
       return "list.bullet"
     case .remoteLocal:
       return "dot.radiowaves.right"
@@ -56,7 +76,7 @@ public enum TimelineFilter: Hashable, Equatable {
       return nil
     }
   }
-  
+
   public func endpoint(sinceId: String?, maxId: String?, minId: String?, offset: Int?) -> Endpoint {
     switch self {
     case .federated: return Timelines.pub(sinceId: sinceId, maxId: maxId, minId: minId, local: false)

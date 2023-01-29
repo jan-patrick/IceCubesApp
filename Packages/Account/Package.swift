@@ -5,13 +5,15 @@ import PackageDescription
 
 let package = Package(
   name: "Account",
+  defaultLocalization: "en",
   platforms: [
     .iOS(.v16),
   ],
   products: [
     .library(
       name: "Account",
-      targets: ["Account"]),
+      targets: ["Account"]
+    ),
   ],
   dependencies: [
     .package(name: "Network", path: "../Network"),
@@ -25,9 +27,11 @@ let package = Package(
         .product(name: "Network", package: "Network"),
         .product(name: "Models", package: "Models"),
         .product(name: "Status", package: "Status"),
-      ]),
+      ]
+    ),
     .testTarget(
       name: "AccountTests",
-      dependencies: ["Account"]),
+      dependencies: ["Account"]
+    ),
   ]
 )

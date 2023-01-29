@@ -5,7 +5,7 @@ public enum Notifications: Endpoint {
                      maxId: String?,
                      types: [String]?)
   case clear
-  
+
   public func path() -> String {
     switch self {
     case .notifications:
@@ -14,14 +14,14 @@ public enum Notifications: Endpoint {
       return "notifications/clear"
     }
   }
-  
+
   public func queryItems() -> [URLQueryItem]? {
     switch self {
-    case .notifications(let sinceId, let maxId, let types):
+    case let .notifications(sinceId, maxId, types):
       var params = makePaginationParam(sinceId: sinceId, maxId: maxId, mindId: nil) ?? []
       if let types {
         for type in types {
-          params.append(.init(name: "types[]", value: type))
+          params.append(.init(name: "exclude_types[]", value: type))
         }
       }
       return params

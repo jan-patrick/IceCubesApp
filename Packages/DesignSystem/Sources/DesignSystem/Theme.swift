@@ -6,17 +6,18 @@ public class Theme: ObservableObject {
     case colorScheme, tint, label, primaryBackground, secondaryBackground
     case avatarPosition, avatarShape, statusActionsDisplay, statusDisplayStyle
     case selectedSet, selectedScheme
+    case followSystemColorSchme
   }
-  
+
   public enum AvatarPosition: String, CaseIterable {
     case leading, top
-    
+
     public var description: LocalizedStringKey {
       switch self {
       case .leading:
-        return "Leading"
+        return "enum.avatar-position.leading"
       case .top:
-        return "Top"
+        return "enum.avatar-position.top"
       }
     }
   }
@@ -27,42 +28,42 @@ public class Theme: ObservableObject {
     public var description: LocalizedStringKey {
       switch self {
       case .circle:
-        return "Circle"
+        return "enum.avatar-shape.circle"
       case .rounded:
-        return "Rounded"
+        return "enum.avatar-shape.rounded"
       }
     }
   }
-  
+
   public enum StatusActionsDisplay: String, CaseIterable {
     case full, discret, none
 
     public var description: LocalizedStringKey {
       switch self {
       case .full:
-        return "All"
+        return "enum.status-actions-display.all"
       case .discret:
-        return "Only buttons"
+        return "enum.status-actions-display.only-buttons"
       case .none:
-        return "No buttons"
+        return "enum.status-actions-display.no-buttons"
       }
     }
   }
-  
+
   public enum StatusDisplayStyle: String, CaseIterable {
     case large, compact
 
     public var description: LocalizedStringKey {
       switch self {
       case .large:
-        return "Large"
+        return "enum.status-display-style.large"
       case .compact:
-        return "Compact"
+        return "enum.status-display-style.compact"
       }
     }
   }
-  
-  @AppStorage("is_previously_set") private var isSet: Bool = false
+
+  @AppStorage("is_previously_set") public var isThemePreviouslySet: Bool = false
   @AppStorage(ThemeKey.selectedScheme.rawValue) public var selectedScheme: ColorScheme = .dark
   @AppStorage(ThemeKey.tint.rawValue) public var tintColor: Color = .black
   @AppStorage(ThemeKey.primaryBackground.rawValue) public var primaryBackgroundColor: Color = .white
@@ -73,23 +74,19 @@ public class Theme: ObservableObject {
   @AppStorage(ThemeKey.selectedSet.rawValue) var storedSet: ColorSetName = .iceCubeDark
   @AppStorage(ThemeKey.statusActionsDisplay.rawValue) public var statusActionsDisplay: StatusActionsDisplay = .full
   @AppStorage(ThemeKey.statusDisplayStyle.rawValue) public var statusDisplayStyle: StatusDisplayStyle = .large
+  @AppStorage(ThemeKey.followSystemColorSchme.rawValue) public var followSystemColorScheme: Bool = true
 
   @Published public var avatarPosition: AvatarPosition = .top
   @Published public var avatarShape: AvatarShape = .rounded
   @Published public var selectedSet: ColorSetName = .iceCubeDark
 
   private var cancellables = Set<AnyCancellable>()
-  
-  public init() {
+
+  public static let shared = Theme()
+
+  private init() {
     selectedSet = storedSet
-    
-    // If theme is never set before set the default store. This should only execute once after install.
-    
-    if !isSet {
-      setColor(withName: .iceCubeDark)
-      isSet = true
-    }
-    
+
     avatarPosition = AvatarPosition(rawValue: rawAvatarPosition) ?? .top
     avatarShape = AvatarShape(rawValue: rawAvatarShape) ?? .rounded
 
@@ -108,7 +105,7 @@ public class Theme: ObservableObject {
         self?.rawAvatarShape = shape
       }
       .store(in: &cancellables)
-    
+
     // Workaround, since @AppStorage can't be directly observed
     $selectedSet
       .dropFirst()
@@ -117,25 +114,29 @@ public class Theme: ObservableObject {
       }
       .store(in: &cancellables)
   }
-  
+
   public static var allColorSet: [ColorSet] {
     [
       IceCubeDark(),
       IceCubeLight(),
+      IceCubeNeonDark(),
+      IceCubeNeonLight(),
       DesertDark(),
       DesertLight(),
       NemesisDark(),
-      NemesisLight()
+      NemesisLight(),
+      MediumLight(),
+      MediumDark(),
     ]
   }
-  
+
   public func setColor(withName name: ColorSetName) {
     let colorSet = Theme.allColorSet.filter { $0.name == name }.first ?? IceCubeDark()
-    self.selectedScheme = colorSet.scheme
-    self.tintColor = colorSet.tintColor
-    self.primaryBackgroundColor = colorSet.primaryBackgroundColor
-    self.secondaryBackgroundColor = colorSet.secondaryBackgroundColor
-    self.labelColor = colorSet.labelColor
-    self.storedSet = name
+    selectedScheme = colorSet.scheme
+    tintColor = colorSet.tintColor
+    primaryBackgroundColor = colorSet.primaryBackgroundColor
+    secondaryBackgroundColor = colorSet.secondaryBackgroundColor
+    labelColor = colorSet.labelColor
+    storedSet = name
   }
 }

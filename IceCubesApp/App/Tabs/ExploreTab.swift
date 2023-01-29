@@ -1,43 +1,48 @@
-import SwiftUI
+import AppAccount
+import DesignSystem
 import Env
-import Models
-import Shimmer
 import Explore
-import Env
+import Models
 import Network
+import Shimmer
+import SwiftUI
 
 struct ExploreTab: View {
+  @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var currentAccount: CurrentAccount
   @EnvironmentObject private var client: Client
-  @StateObject private var routeurPath = RouterPath()
+  @StateObject private var routerPath = RouterPath()
   @Binding var popToRootTab: Tab
-  
+
   var body: some View {
-    NavigationStack(path: $routeurPath.path) {
+    NavigationStack(path: $routerPath.path) {
       ExploreView()
-        .withAppRouteur()
-        .withSheetDestinations(sheetDestinations: $routeurPath.presentedSheet)
+        .withAppRouter()
+        .withSheetDestinations(sheetDestinations: $routerPath.presentedSheet)
+        .toolbarBackground(theme.primaryBackgroundColor.opacity(0.50), for: .navigationBar)
         .toolbar {
-          statusEditorToolbarItem(routeurPath: routeurPath,
-                                  visibility: preferences.serverPreferences?.postVisibility ?? .pub)
-          ToolbarItem(placement: .navigationBarLeading) {
-            AppAccountsSelectorView(routeurPath: routeurPath)
+          statusEditorToolbarItem(routerPath: routerPath,
+                                  visibility: preferences.postVisibility)
+          if UIDevice.current.userInterfaceIdiom != .pad {
+            ToolbarItem(placement: .navigationBarLeading) {
+              AppAccountsSelectorView(routerPath: routerPath)
+            }
           }
         }
     }
-    .withSafariRouteur()
-    .environmentObject(routeurPath)
+    .withSafariRouter()
+    .environmentObject(routerPath)
     .onChange(of: $popToRootTab.wrappedValue) { popToRootTab in
       if popToRootTab == .explore {
-        routeurPath.path = []
+        routerPath.path = []
       }
     }
     .onChange(of: currentAccount.account?.id) { _ in
-      routeurPath.path = []
+      routerPath.path = []
     }
     .onAppear {
-      routeurPath.client = client
+      routerPath.client = client
     }
   }
 }

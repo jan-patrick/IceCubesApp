@@ -1,78 +1,91 @@
-import SwiftUI
-import Timeline
-import Env
-import Network
+import AppAccount
 import Combine
 import DesignSystem
+import Env
 import Models
+import Network
+import SwiftUI
+import Timeline
 
 struct TimelineTab: View {
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var currentAccount: CurrentAccount
   @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var client: Client
-  @StateObject private var routeurPath = RouterPath()
+  @StateObject private var routerPath = RouterPath()
   @Binding var popToRootTab: Tab
-  
+
   @State private var didAppear: Bool = false
-  @State private var timeline: TimelineFilter = .home
+  @State private var timeline: TimelineFilter
   @State private var scrollToTopSignal: Int = 0
-    
+
+  private let canFilterTimeline: Bool
+
+  init(popToRootTab: Binding<Tab>, timeline: TimelineFilter? = nil) {
+    canFilterTimeline = timeline == nil
+    self.timeline = timeline ?? .home
+    _popToRootTab = popToRootTab
+  }
+
   var body: some View {
-    NavigationStack(path: $routeurPath.path) {
+    NavigationStack(path: $routerPath.path) {
       TimelineView(timeline: $timeline, scrollToTopSignal: $scrollToTopSignal)
-        .withAppRouteur()
-        .withSheetDestinations(sheetDestinations: $routeurPath.presentedSheet)
+        .withAppRouter()
+        .withSheetDestinations(sheetDestinations: $routerPath.presentedSheet)
         .toolbar {
           toolbarView
         }
+        .toolbarBackground(theme.primaryBackgroundColor.opacity(0.50), for: .navigationBar)
         .id(currentAccount.account?.id)
     }
     .onAppear {
-      routeurPath.client = client
-      if !didAppear {
+      routerPath.client = client
+      if !didAppear && canFilterTimeline {
         didAppear = true
         timeline = client.isAuth ? .home : .federated
       }
       Task {
         await currentAccount.fetchLists()
       }
+      if !client.isAuth {
+        routerPath.presentedSheet = .addAccount
+      }
     }
     .onChange(of: client.isAuth, perform: { isAuth in
       timeline = isAuth ? .home : .federated
     })
     .onChange(of: currentAccount.account?.id, perform: { _ in
-      timeline = client.isAuth ? .home : .federated
+      timeline = client.isAuth && canFilterTimeline ? .home : .federated
     })
     .onChange(of: $popToRootTab.wrappedValue) { popToRootTab in
       if popToRootTab == .timeline {
-        if routeurPath.path.isEmpty {
+        if routerPath.path.isEmpty {
           scrollToTopSignal += 1
         } else {
-          routeurPath.path = []
+          routerPath.path = []
         }
       }
     }
     .onChange(of: currentAccount.account?.id) { _ in
-      routeurPath.path = []
+      routerPath.path = []
     }
-    .withSafariRouteur()
-    .environmentObject(routeurPath)
+    .withSafariRouter()
+    .environmentObject(routerPath)
   }
-  
-  
+
   @ViewBuilder
   private var timelineFilterButton: some View {
     ForEach(TimelineFilter.availableTimeline(client: client), id: \.self) { timeline in
       Button {
         self.timeline = timeline
       } label: {
-        Label(timeline.title(), systemImage: timeline.iconName() ?? "")
+        Label(timeline.localizedTitle(), systemImage: timeline.iconName() ?? "")
       }
     }
     if !currentAccount.lists.isEmpty {
-      Menu("Lists") {
-        ForEach(currentAccount.lists) { list in
+      let sortedLists = currentAccount.lists.sorted { $0.title.lowercased() < $1.title.lowercased() }
+      Menu("timeline.filter.lists") {
+        ForEach(sortedLists) { list in
           Button {
             timeline = .list(list: list)
           } label: {
@@ -81,10 +94,11 @@ struct TimelineTab: View {
         }
       }
     }
-    
+
     if !currentAccount.tags.isEmpty {
-      Menu("Followed Tags") {
-        ForEach(currentAccount.tags) { tag in
+      let sortedTags = currentAccount.tags.sorted { $0.name.lowercased() < $1.name.lowercased() }
+      Menu("timeline.filter.tags") {
+        ForEach(sortedTags) { tag in
           Button {
             timeline = .hashtag(tag: tag.name, accountId: nil)
           } label: {
@@ -93,8 +107,8 @@ struct TimelineTab: View {
         }
       }
     }
-    
-    Menu("Local Timelines") {
+
+    Menu("timeline.filter.local") {
       ForEach(preferences.remoteLocalTimelines, id: \.self) { server in
         Button {
           timeline = .remoteLocal(server: server)
@@ -103,32 +117,36 @@ struct TimelineTab: View {
         }
       }
       Button {
-        routeurPath.presentedSheet = .addRemoteLocalTimeline
+        routerPath.presentedSheet = .addRemoteLocalTimeline
       } label: {
-        Label("Add a local timeline", systemImage: "badge.plus.radiowaves.right")
+        Label("timeline.filter.add-local", systemImage: "badge.plus.radiowaves.right")
       }
     }
   }
-    
+
   private var addAccountButton: some View {
     Button {
-      routeurPath.presentedSheet = .addAccount
+      routerPath.presentedSheet = .addAccount
     } label: {
       Image(systemName: "person.badge.plus")
     }
   }
-  
+
   @ToolbarContentBuilder
   private var toolbarView: some ToolbarContent {
-    ToolbarTitleMenu {
-      timelineFilterButton
+    if canFilterTimeline {
+      ToolbarTitleMenu {
+        timelineFilterButton
+      }
     }
     if client.isAuth {
-      ToolbarItem(placement: .navigationBarLeading) {
-        AppAccountsSelectorView(routeurPath: routeurPath)
+      if UIDevice.current.userInterfaceIdiom != .pad {
+        ToolbarItem(placement: .navigationBarLeading) {
+          AppAccountsSelectorView(routerPath: routerPath)
+        }
       }
-      statusEditorToolbarItem(routeurPath: routeurPath,
-                              visibility: preferences.serverPreferences?.postVisibility ?? .pub)
+      statusEditorToolbarItem(routerPath: routerPath,
+                              visibility: preferences.postVisibility)
     } else {
       ToolbarItem(placement: .navigationBarTrailing) {
         addAccountButton
@@ -138,7 +156,7 @@ struct TimelineTab: View {
     case let .list(list):
       ToolbarItem {
         Button {
-          routeurPath.presentedSheet = .listEdit(list: list)
+          routerPath.presentedSheet = .listEdit(list: list)
         } label: {
           Image(systemName: "list.bullet")
         }

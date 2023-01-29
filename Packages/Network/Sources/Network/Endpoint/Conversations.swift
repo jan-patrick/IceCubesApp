@@ -1,10 +1,10 @@
 import Foundation
 
 public enum Conversations: Endpoint {
-  case conversations
+  case conversations(maxId: String?)
   case delete(id: String)
   case read(id: String)
-  
+
   public func path() -> String {
     switch self {
     case .conversations:
@@ -15,8 +15,13 @@ public enum Conversations: Endpoint {
       return "conversations/\(id)/read"
     }
   }
-  
+
   public func queryItems() -> [URLQueryItem]? {
-    return nil
+    switch self {
+    case let .conversations(maxId):
+      return makePaginationParam(sinceId: nil, maxId: maxId, mindId: nil)
+    default:
+      return nil
+    }
   }
 }

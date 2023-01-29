@@ -1,23 +1,24 @@
-import SwiftUI
-import Models
 import DesignSystem
+import EmojiText
 import Env
-import Shimmer
+import Models
 import NukeUI
+import Shimmer
+import SwiftUI
 
 struct AccountDetailHeaderView: View {
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var quickLook: QuickLook
-  @EnvironmentObject private var routeurPath: RouterPath
+  @EnvironmentObject private var routerPath: RouterPath
+  @EnvironmentObject private var currentAccount: CurrentAccount
   @Environment(\.redactionReasons) private var reasons
-  
-  let isCurrentUser: Bool
+
+  @ObservedObject var viewModel: AccountDetailViewModel
   let account: Account
-  let relationship: Relationshionship?
   let scrollViewProxy: ScrollViewProxy?
-  
+
   @Binding var scrollOffset: CGFloat
-  
+
   private var bannerHeight: CGFloat {
     200 + (scrollOffset > 0 ? scrollOffset * 2 : 0)
   }
@@ -28,44 +29,42 @@ struct AccountDetailHeaderView: View {
       accountInfoView
     }
   }
-  
+
   private var headerImageView: some View {
-    GeometryReader { proxy in
-      ZStack(alignment: .bottomTrailing) {
-        if reasons.contains(.placeholder) {
-          Rectangle()
-            .foregroundColor(.gray)
-            .frame(height: bannerHeight)
-        } else {
-          LazyImage(url: account.header) { state in
-            if let image = state.image {
-              image
-                .resizingMode(.aspectFill)
-                .overlay(.black.opacity(0.50))
-            } else if state.isLoading {
-              Color.gray
-                .frame(height: bannerHeight)
-                .shimmering()
-            } else {
-              Color.gray
-                .frame(height: bannerHeight)
-            }
-          }
+    ZStack(alignment: .bottomTrailing) {
+      if reasons.contains(.placeholder) {
+        Rectangle()
+          .foregroundColor(.gray)
           .frame(height: bannerHeight)
+      } else {
+        LazyImage(url: account.header) { state in
+          if let image = state.image {
+            image
+              .resizingMode(.aspectFill)
+              .overlay(.black.opacity(0.50))
+          } else if state.isLoading {
+            Color.gray
+              .frame(height: bannerHeight)
+              .shimmering()
+          } else {
+            Color.gray
+              .frame(height: bannerHeight)
+          }
         }
-        
-        if relationship?.followedBy == true {
-          Text("Follows You")
-            .font(.footnote)
-            .fontWeight(.semibold)
-            .padding(4)
-            .background(.ultraThinMaterial)
-            .cornerRadius(4)
-            .padding(8)
-        }
+        .frame(height: bannerHeight)
       }
-      .background(Color.gray)
+
+      if viewModel.relationship?.followedBy == true {
+        Text("account.relation.follows-you")
+          .font(.scaledFootnote)
+          .fontWeight(.semibold)
+          .padding(4)
+          .background(.ultraThinMaterial)
+          .cornerRadius(4)
+          .padding(8)
+      }
     }
+    .background(Color.gray)
     .frame(height: bannerHeight)
     .offset(y: scrollOffset > 0 ? -scrollOffset : 0)
     .contentShape(Rectangle())
@@ -75,15 +74,15 @@ struct AccountDetailHeaderView: View {
       }
     }
   }
-  
+
   private var accountAvatarView: some View {
     HStack {
       AvatarView(url: account.avatar, size: .account)
-      .onTapGesture {
-        Task {
-          await quickLook.prepareFor(urls: [account.avatar], selectedURL: account.avatar)
+        .onTapGesture {
+          Task {
+            await quickLook.prepareFor(urls: [account.avatar], selectedURL: account.avatar)
+          }
         }
-      }
       Spacer()
       Group {
         Button {
@@ -91,63 +90,95 @@ struct AccountDetailHeaderView: View {
             scrollViewProxy?.scrollTo("status", anchor: .top)
           }
         } label: {
-          makeCustomInfoLabel(title: "Posts", count: account.statusesCount)
+          makeCustomInfoLabel(title: "account.posts", count: account.statusesCount)
         }
-        NavigationLink(value: RouteurDestinations.following(id: account.id)) {
-          makeCustomInfoLabel(title: "Following", count: account.followingCount)
+        NavigationLink(value: RouterDestinations.following(id: account.id)) {
+          makeCustomInfoLabel(title: "account.following", count: account.followingCount)
         }
-        NavigationLink(value: RouteurDestinations.followers(id: account.id)) {
-          makeCustomInfoLabel(title: "Followers", count: account.followersCount)
+        NavigationLink(value: RouterDestinations.followers(id: account.id)) {
+          makeCustomInfoLabel(
+            title: "account.followers",
+            count: account.followersCount,
+            needsBadge: currentAccount.account?.id == account.id && !currentAccount.followRequests.isEmpty
+          )
         }
       }.offset(y: 20)
     }
   }
-  
+
   private var accountInfoView: some View {
     Group {
       accountAvatarView
-      HStack {
+      HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 0) {
-          account.displayNameWithEmojis
-              .font(.headline)
+          EmojiTextApp(.init(stringValue: account.safeDisplayName), emojis: account.emojis)
+            .font(.scaledHeadline)
           Text("@\(account.acct)")
-              .font(.callout)
-              .foregroundColor(.gray)
+            .font(.scaledCallout)
+            .foregroundColor(.gray)
+          joinedAtView
         }
         Spacer()
-        if let relationship = relationship, !isCurrentUser {
-          FollowButton(viewModel: .init(accountId: account.id,
-                                        relationship: relationship))
+        if let relationship = viewModel.relationship, !viewModel.isCurrentUser {
+          HStack {
+            FollowButton(viewModel: .init(accountId: account.id,
+                                          relationship: relationship,
+                                          shouldDisplayNotify: true,
+                                          relationshipUpdated: { relationship in
+                                            viewModel.relationship = relationship
+                                          }))
+          }
         }
       }
-      Text(account.note.asSafeAttributedString)
-        .font(.body)
+      EmojiTextApp(account.note, emojis: account.emojis)
+        .font(.scaledBody)
         .padding(.top, 8)
         .environment(\.openURL, OpenURLAction { url in
-          routeurPath.handle(url: url)
+          routerPath.handle(url: url)
         })
     }
     .padding(.horizontal, .layoutPadding)
     .offset(y: -40)
   }
-  
-  private func makeCustomInfoLabel(title: String, count: Int) -> some View {
+
+  private func makeCustomInfoLabel(title: LocalizedStringKey, count: Int, needsBadge: Bool = false) -> some View {
     VStack {
       Text("\(count)")
-        .font(.headline)
+        .font(.scaledHeadline)
         .foregroundColor(theme.tintColor)
+        .overlay(alignment: .trailing) {
+          if needsBadge {
+            Circle()
+              .fill(Color.red)
+              .frame(width: 9, height: 9)
+              .offset(x: 12)
+          }
+        }
       Text(title)
-        .font(.footnote)
+        .font(.scaledFootnote)
         .foregroundColor(.gray)
+    }
+  }
+
+  @ViewBuilder
+  private var joinedAtView: some View {
+    if let joinedAt = viewModel.account?.createdAt.asDate {
+      HStack(spacing: 4) {
+        Image(systemName: "calendar")
+        Text("account.joined")
+        Text(joinedAt, style: .date)
+      }
+      .foregroundColor(.gray)
+      .font(.footnote)
+      .padding(.top, 6)
     }
   }
 }
 
 struct AccountDetailHeaderView_Previews: PreviewProvider {
   static var previews: some View {
-    AccountDetailHeaderView(isCurrentUser: false,
+    AccountDetailHeaderView(viewModel: .init(account: .placeholder()),
                             account: .placeholder(),
-                            relationship: .placeholder(),
                             scrollViewProxy: nil,
                             scrollOffset: .constant(0))
   }

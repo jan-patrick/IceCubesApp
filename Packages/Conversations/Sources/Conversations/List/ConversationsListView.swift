@@ -1,19 +1,19 @@
-import SwiftUI
-import Network
-import Models
 import DesignSystem
-import Shimmer
 import Env
+import Models
+import Network
+import Shimmer
+import SwiftUI
 
 public struct ConversationsListView: View {
-  @EnvironmentObject private var routeurPath: RouterPath
+  @EnvironmentObject private var routerPath: RouterPath
   @EnvironmentObject private var watcher: StreamWatcher
   @EnvironmentObject private var client: Client
   @EnvironmentObject private var theme: Theme
   
   @StateObject private var viewModel = ConversationsListViewModel()
   
-  public init() { }
+  public init() {}
   
   private var conversations: [Conversation] {
     if viewModel.isLoadingFirstPage {
@@ -25,43 +25,61 @@ public struct ConversationsListView: View {
   public var body: some View {
     ScrollView {
       LazyVStack {
-        if !conversations.isEmpty || viewModel.isLoadingFirstPage {
-          ForEach(conversations) { conversation in
-            if viewModel.isLoadingFirstPage {
-              ConversationsListRow(conversation: conversation, viewModel: viewModel)
-                .padding(.horizontal, .layoutPadding)
-                .redacted(reason: .placeholder)
-                .shimmering()
-            } else {
-              ConversationsListRow(conversation: conversation, viewModel: viewModel)
-                .padding(.horizontal, .layoutPadding)
+        Group {
+          if !conversations.isEmpty || viewModel.isLoadingFirstPage {
+            ForEach(conversations) { conversation in
+              if viewModel.isLoadingFirstPage {
+                ConversationsListRow(conversation: conversation, viewModel: viewModel)
+                  .padding(.horizontal, .layoutPadding)
+                  .redacted(reason: .placeholder)
+                  .shimmering()
+              } else {
+                ConversationsListRow(conversation: conversation, viewModel: viewModel)
+                  .padding(.horizontal, .layoutPadding)
+              }
+              Divider()
             }
-            Divider()
+          } else if conversations.isEmpty && !viewModel.isLoadingFirstPage && !viewModel.isError {
+            EmptyView(iconName: "tray",
+                      title: "conversations.empty.title",
+                      message: "conversations.empty.message")
+          } else if viewModel.isError {
+            ErrorView(title: "conversations.error.title",
+                      message: "conversations.error.message",
+                      buttonTitle: "conversations.error.button") {
+              Task {
+                await viewModel.fetchConversations()
+              }
+            }
           }
-        } else if conversations.isEmpty && !viewModel.isLoadingFirstPage && !viewModel.isError {
-          EmptyView(iconName: "tray",
-                    title: "Inbox Zero",
-                    message: "Looking for some social media love? You'll find all your direct messages and private mentions right here. Happy messaging! 📱❤️")
-        } else if viewModel.isError {
-          ErrorView(title: "An error occurred",
-                    message: "Error while loading your messages",
-                    buttonTitle: "Retry") {
-            Task {
-              await viewModel.fetchConversations()
+          
+          if viewModel.nextPage != nil {
+            HStack {
+              Spacer()
+              ProgressView()
+              Spacer()
+            }
+            .onAppear {
+              if !viewModel.isLoadingNextPage {
+                Task {
+                  await viewModel.fetchNextPage()
+                }
+              }
             }
           }
         }
+        .frame(maxWidth: .maxColumnWidth)
       }
       .padding(.top, .layoutPadding)
     }
     .scrollContentBackground(.hidden)
     .background(theme.primaryBackgroundColor)
-    .navigationTitle("Direct Messages")
+    .navigationTitle("conversations.navigation-title")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       StatusEditorToolbarItem(visibility: .direct)
     }
-    .onChange(of: watcher.latestEvent?.id) { id in
+    .onChange(of: watcher.latestEvent?.id) { _ in
       if let latestEvent = watcher.latestEvent {
         viewModel.handleEvent(event: latestEvent)
       }

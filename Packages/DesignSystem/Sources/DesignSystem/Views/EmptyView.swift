@@ -2,15 +2,15 @@ import SwiftUI
 
 public struct EmptyView: View {
   public let iconName: String
-  public let title: String
-  public let message: String
-  
-  public init(iconName: String, title: String, message: String) {
+  public let title: LocalizedStringKey
+  public let message: LocalizedStringKey
+
+  public init(iconName: String, title: LocalizedStringKey, message: LocalizedStringKey) {
     self.iconName = iconName
     self.title = title
     self.message = message
   }
-  
+
   public var body: some View {
     VStack {
       Image(systemName: iconName)
@@ -18,10 +18,10 @@ public struct EmptyView: View {
         .aspectRatio(contentMode: .fit)
         .frame(maxHeight: 50)
       Text(title)
-        .font(.title)
+        .font(.scaledTitle)
         .padding(.top, 16)
       Text(message)
-        .font(.subheadline)
+        .font(.scaledSubheadline)
         .multilineTextAlignment(.center)
         .foregroundColor(.gray)
     }

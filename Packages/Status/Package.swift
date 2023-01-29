@@ -5,15 +5,18 @@ import PackageDescription
 
 let package = Package(
   name: "Status",
+  defaultLocalization: "en",
   platforms: [
     .iOS(.v16),
   ],
   products: [
     .library(
       name: "Status",
-      targets: ["Status"]),
+      targets: ["Status"]
+    ),
   ],
   dependencies: [
+    .package(name: "AppAccount", path: "../AppAccount"),
     .package(name: "Models", path: "../Models"),
     .package(name: "Network", path: "../Network"),
     .package(name: "Env", path: "../Env"),
@@ -24,12 +27,13 @@ let package = Package(
     .target(
       name: "Status",
       dependencies: [
+        .product(name: "AppAccount", package: "AppAccount"),
         .product(name: "Models", package: "Models"),
         .product(name: "Network", package: "Network"),
         .product(name: "Env", package: "Env"),
         .product(name: "DesignSystem", package: "DesignSystem"),
         .product(name: "TextView", package: "TextView"),
-      ]),
+      ]
+    ),
   ]
 )
-

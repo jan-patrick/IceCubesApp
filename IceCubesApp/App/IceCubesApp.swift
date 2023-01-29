@@ -1,55 +1,66 @@
-import SwiftUI
+import Account
+import AppAccount
 import AVFoundation
-import Timeline
-import Network
-import KeychainSwift
-import Env
 import DesignSystem
-import QuickLook
+import Env
+import KeychainSwift
+import Network
 import RevenueCat
+import SwiftUI
+import Timeline
 
 @main
 struct IceCubesApp: App {
-  public static let defaultServer = "mastodon.social"
-  
   @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
-  
+
   @Environment(\.scenePhase) private var scenePhase
+
   @StateObject private var appAccountsManager = AppAccountsManager.shared
-  @StateObject private var currentInstance = CurrentInstance()
-  @StateObject private var currentAccount = CurrentAccount()
-  @StateObject private var userPreferences = UserPreferences()
+  @StateObject private var currentInstance = CurrentInstance.shared
+  @StateObject private var currentAccount = CurrentAccount.shared
+  @StateObject private var userPreferences = UserPreferences.shared
   @StateObject private var watcher = StreamWatcher()
   @StateObject private var quickLook = QuickLook()
-  @StateObject private var theme = Theme()
-  
+  @StateObject private var theme = Theme.shared
+  @StateObject private var sidebarRouterPath = RouterPath()
+
   @State private var selectedTab: Tab = .timeline
   @State private var selectSidebarItem: Tab? = .timeline
   @State private var popToRootTab: Tab = .other
-  
+  @State private var sideBarLoadedTabs: Set<Tab> = Set()
+
+  private let feedbackGenerator = UISelectionFeedbackGenerator()
+
   private var availableTabs: [Tab] {
     appAccountsManager.currentClient.isAuth ? Tab.loggedInTabs() : Tab.loggedOutTab()
   }
-  
+
   var body: some Scene {
     WindowGroup {
       appView
-      .applyTheme(theme)
-      .onAppear {
-        setNewClientsInEnv(client: appAccountsManager.currentClient)
-        setupRevenueCat()
-        refreshPushSubs()
-      }
-      .environmentObject(appAccountsManager)
-      .environmentObject(appAccountsManager.currentClient)
-      .environmentObject(quickLook)
-      .environmentObject(currentAccount)
-      .environmentObject(currentInstance)
-      .environmentObject(userPreferences)
-      .environmentObject(theme)
-      .environmentObject(watcher)
-      .environmentObject(PushNotificationsService.shared)
-      .quickLookPreview($quickLook.url, in: quickLook.urls)
+        .applyTheme(theme)
+        .onAppear {
+          setNewClientsInEnv(client: appAccountsManager.currentClient)
+          setupRevenueCat()
+          refreshPushSubs()
+        }
+        .environmentObject(appAccountsManager)
+        .environmentObject(appAccountsManager.currentClient)
+        .environmentObject(quickLook)
+        .environmentObject(currentAccount)
+        .environmentObject(currentInstance)
+        .environmentObject(userPreferences)
+        .environmentObject(theme)
+        .environmentObject(watcher)
+        .environmentObject(PushNotificationsService.shared)
+        .fullScreenCover(item: $quickLook.url, content: { url in
+          QuickLookPreview(selectedURL: url, urls: quickLook.urls)
+            .edgesIgnoringSafeArea(.bottom)
+            .background(TransparentBackground())
+        })
+    }
+    .commands {
+      appMenu
     }
     .onChange(of: scenePhase) { scenePhase in
       handleScenePhase(scenePhase: scenePhase)
@@ -61,26 +72,52 @@ struct IceCubesApp: App {
       }
     }
   }
-  
+
   @ViewBuilder
   private var appView: some View {
-    /*
     if UIDevice.current.userInterfaceIdiom == .pad || UIDevice.current.userInterfaceIdiom == .mac {
-      splitView
+      sidebarView
     } else {
       tabBarView
     }
-    */
-    tabBarView
   }
-  
+
   private func badgeFor(tab: Tab) -> Int {
     if tab == .notifications && selectedTab != tab {
       return watcher.unreadNotificationsCount + userPreferences.pushNotificationsCount
     }
     return 0
   }
-  
+
+  private var sidebarView: some View {
+    SideBarView(selectedTab: $selectedTab,
+                popToRootTab: $popToRootTab,
+                tabs: availableTabs,
+                routerPath: sidebarRouterPath) {
+      ZStack {
+        if selectedTab == .profile {
+          ProfileTab(popToRootTab: $popToRootTab)
+        }
+        ForEach(availableTabs) { tab in
+          if tab == selectedTab || sideBarLoadedTabs.contains(tab) {
+            tab
+              .makeContentView(popToRootTab: $popToRootTab)
+              .opacity(tab == selectedTab ? 1 : 0)
+              .transition(.opacity)
+              .id("\(tab)\(appAccountsManager.currentAccount.id)")
+              .onAppear {
+                sideBarLoadedTabs.insert(tab)
+              }
+          } else {
+            EmptyView()
+          }
+        }
+      }
+    }.onChange(of: $appAccountsManager.currentAccount.id) { _ in
+      sideBarLoadedTabs.removeAll()
+    }
+  }
+
   private var tabBarView: some View {
     TabView(selection: .init(get: {
       selectedTab
@@ -93,6 +130,7 @@ struct IceCubesApp: App {
         }
       }
       selectedTab = newTab
+      feedbackGenerator.selectionChanged()
     })) {
       ForEach(availableTabs) { tab in
         tab.makeContentView(popToRootTab: $popToRootTab)
@@ -105,29 +143,14 @@ struct IceCubesApp: App {
       }
     }
   }
-  
-  private var splitView: some View {
-    NavigationSplitView {
-      List(availableTabs, selection: $selectSidebarItem) { tab in
-        NavigationLink(value: tab) {
-          tab.label
-        }
-      }
-      .scrollContentBackground(.hidden)
-      .background(theme.secondaryBackgroundColor)
-      .navigationSplitViewColumnWidth(200)
-    } detail: {
-      selectSidebarItem?.makeContentView(popToRootTab: $popToRootTab)
-    }
-  }
-  
+
   private func setNewClientsInEnv(client: Client) {
     currentAccount.setClient(client: client)
     currentInstance.setClient(client: client)
     userPreferences.setClient(client: client)
     watcher.setClient(client: client)
   }
-  
+
   private func handleScenePhase(scenePhase: ScenePhase) {
     switch scenePhase {
     case .background:
@@ -144,33 +167,75 @@ struct IceCubesApp: App {
       break
     }
   }
-  
+
   private func setupRevenueCat() {
     Purchases.logLevel = .error
     Purchases.configure(withAPIKey: "appl_JXmiRckOzXXTsHKitQiicXCvMQi")
   }
-  
+
   private func refreshPushSubs() {
     PushNotificationsService.shared.requestPushNotifications()
+  }
+
+  @CommandsBuilder
+  private var appMenu: some Commands {
+    CommandGroup(replacing: .newItem) {
+      Button("menu.new-post") {
+        sidebarRouterPath.presentedSheet = .newStatusEditor(visibility: userPreferences.postVisibility)
+      }
+    }
+    CommandGroup(replacing: .textFormatting) {
+      Menu("menu.font") {
+        Button("menu.font.bigger") {
+          if userPreferences.fontSizeScale < 1.5 {
+            userPreferences.fontSizeScale += 0.1
+          }
+        }
+        Button("menu.font.smaller") {
+          if userPreferences.fontSizeScale > 0.5 {
+            userPreferences.fontSizeScale -= 0.1
+          }
+        }
+      }
+    }
   }
 }
 
 class AppDelegate: NSObject, UIApplicationDelegate {
-  func application(_ application: UIApplication,
-                   didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+  let themeObserver = ThemeObserverViewController(nibName: nil, bundle: nil)
+
+  func application(_: UIApplication,
+                   didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
+  {
     try? AVAudioSession.sharedInstance().setCategory(.ambient, options: .mixWithOthers)
     return true
   }
-  
-  func application(_ application: UIApplication,
-                   didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+
+  func application(_: UIApplication,
+                   didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data)
+  {
     PushNotificationsService.shared.pushToken = deviceToken
     Task {
-      await PushNotificationsService.shared.fetchSubscriptions(accounts: AppAccountsManager.shared.pushAccounts)
-      await PushNotificationsService.shared.updateSubscriptions(accounts: AppAccountsManager.shared.pushAccounts)
+      PushNotificationsService.shared.setAccounts(accounts: AppAccountsManager.shared.pushAccounts)
+      await PushNotificationsService.shared.updateSubscriptions(forceCreate: false)
     }
   }
-  
-  func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+
+  func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError _: Error) {}
+
+  func application(_: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options _: UIScene.ConnectionOptions) -> UISceneConfiguration {
+    let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+    if connectingSceneSession.role == .windowApplication {
+      configuration.delegateClass = SceneDelegate.self
+    }
+    return configuration
+  }
+}
+
+class ThemeObserverViewController: UIViewController {
+  override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+    super.traitCollectionDidChange(previousTraitCollection)
+
+    print(traitCollection.userInterfaceStyle.rawValue)
   }
 }

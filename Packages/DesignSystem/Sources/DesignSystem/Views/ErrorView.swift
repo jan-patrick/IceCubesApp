@@ -1,18 +1,18 @@
 import SwiftUI
 
 public struct ErrorView: View {
-  public let title: String
-  public let message: String
-  public let buttonTitle: String
-  public let onButtonPress: (() -> Void)
-  
-  public init(title: String, message: String, buttonTitle: String, onButtonPress: @escaping (() -> Void)) {
+  public let title: LocalizedStringKey
+  public let message: LocalizedStringKey
+  public let buttonTitle: LocalizedStringKey
+  public let onButtonPress: () -> Void
+
+  public init(title: LocalizedStringKey, message: LocalizedStringKey, buttonTitle: LocalizedStringKey, onButtonPress: @escaping (() -> Void)) {
     self.title = title
     self.message = message
     self.buttonTitle = buttonTitle
     self.onButtonPress = onButtonPress
   }
-  
+
   public var body: some View {
     VStack {
       Image(systemName: "exclamationmark.triangle.fill")
@@ -20,10 +20,10 @@ public struct ErrorView: View {
         .aspectRatio(contentMode: .fit)
         .frame(maxHeight: 50)
       Text(title)
-        .font(.title)
+        .font(.scaledTitle)
         .padding(.top, 16)
       Text(message)
-        .font(.subheadline)
+        .font(.scaledSubheadline)
         .multilineTextAlignment(.center)
         .foregroundColor(.gray)
       Button {

@@ -1,36 +1,65 @@
-import SwiftUI
-import Env
-import Network
-import DesignSystem
-import Models
-import Status
-import Shimmer
 import Account
+import DesignSystem
+import Env
+import Models
+import Network
+import Shimmer
+import Status
+import SwiftUI
 
 public struct ExploreView: View {
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var client: Client
-  @EnvironmentObject private var routeurPath: RouterPath
-  
+  @EnvironmentObject private var routerPath: RouterPath
+
   @StateObject private var viewModel = ExploreViewModel()
-        
-  public init() { }
-  
+
+  public init() {}
+
   public var body: some View {
     List {
-      if !viewModel.searchQuery.isEmpty {
-        if let results = viewModel.results[viewModel.searchQuery] {
-          makeSearchResultsView(results: results)
-        } else {
-          loadingView
-        }
-      } else if !viewModel.isLoaded {
+      if !viewModel.isLoaded {
         loadingView
+      } else if !viewModel.searchQuery.isEmpty {
+        if viewModel.isSearching {
+          HStack {
+            Spacer()
+            ProgressView()
+            Spacer()
+          }
+          .listRowBackground(theme.secondaryBackgroundColor)
+          .listRowSeparator(.hidden)
+          .id(UUID())
+        } else if let results = viewModel.results[viewModel.searchQuery] {
+          if results.isEmpty, !viewModel.isSearching {
+            EmptyView(iconName: "magnifyingglass",
+                      title: "explore.search.empty.title",
+                      message: "explore.search.empty.message")
+              .listRowBackground(theme.secondaryBackgroundColor)
+              .listRowSeparator(.hidden)
+          } else {
+            makeSearchResultsView(results: results)
+          }
+        }
+      } else if viewModel.allSectionsEmpty {
+        EmptyView(iconName: "magnifyingglass",
+                  title: "explore.search.title",
+                  message: "explore.search.message-\(client.server)")
+          .listRowBackground(theme.secondaryBackgroundColor)
+          .listRowSeparator(.hidden)
       } else {
-        trendingTagsSection
-        suggestedAccountsSection
-        trendingPostsSection
-        trendingLinksSection
+        if !viewModel.trendingTags.isEmpty {
+          trendingTagsSection
+        }
+        if !viewModel.suggestedAccounts.isEmpty {
+          suggestedAccountsSection
+        }
+        if !viewModel.trendingStatuses.isEmpty {
+          trendingPostsSection
+        }
+        if !viewModel.trendingLinks.isEmpty {
+          trendingLinksSection
+        }
       }
     }
     .task {
@@ -45,16 +74,11 @@ public struct ExploreView: View {
     .listStyle(.grouped)
     .scrollContentBackground(.hidden)
     .background(theme.secondaryBackgroundColor)
-    .navigationTitle("Explore")
+    .navigationTitle("explore.navigation-title")
     .searchable(text: $viewModel.searchQuery,
-                tokens: $viewModel.tokens,
-                suggestedTokens: $viewModel.suggestedToken,
-                prompt: Text("Search users, posts and tags"),
-                token: { token in
-      Text(token.rawValue)
-    })
+                prompt: Text("explore.search.prompt"))
   }
-  
+
   private var loadingView: some View {
     ForEach(Status.placeholders()) { status in
       StatusRowView(viewModel: .init(status: status, isCompact: false))
@@ -64,11 +88,11 @@ public struct ExploreView: View {
         .listRowBackground(theme.primaryBackgroundColor)
     }
   }
-  
+
   @ViewBuilder
   private func makeSearchResultsView(results: SearchResults) -> some View {
     if !results.accounts.isEmpty {
-      Section("Users") {
+      Section("explore.section.users") {
         ForEach(results.accounts) { account in
           if let relationship = results.relationships.first(where: { $0.id == account.id }) {
             AccountsListRow(viewModel: .init(account: account, relationShip: relationship))
@@ -78,7 +102,7 @@ public struct ExploreView: View {
       }
     }
     if !results.hashtags.isEmpty {
-      Section("Tags") {
+      Section("explore.section.tags") {
         ForEach(results.hashtags) { tag in
           TagRowView(tag: tag)
             .listRowBackground(theme.primaryBackgroundColor)
@@ -87,7 +111,7 @@ public struct ExploreView: View {
       }
     }
     if !results.statuses.isEmpty {
-      Section("Posts") {
+      Section("explore.section.posts") {
         ForEach(results.statuses) { status in
           StatusRowView(viewModel: .init(status: status))
             .listRowBackground(theme.primaryBackgroundColor)
@@ -96,16 +120,16 @@ public struct ExploreView: View {
       }
     }
   }
-  
+
   private var suggestedAccountsSection: some View {
-    Section("Suggested Users") {
+    Section("explore.section.suggested-users") {
       ForEach(viewModel.suggestedAccounts
         .prefix(upTo: viewModel.suggestedAccounts.count > 3 ? 3 : viewModel.suggestedAccounts.count)) { account in
-        if let relationship = viewModel.suggestedAccountsRelationShips.first(where: { $0.id == account.id }) {
-          AccountsListRow(viewModel: .init(account: account, relationShip: relationship))
-            .listRowBackground(theme.primaryBackgroundColor)
+          if let relationship = viewModel.suggestedAccountsRelationShips.first(where: { $0.id == account.id }) {
+            AccountsListRow(viewModel: .init(account: account, relationShip: relationship))
+              .listRowBackground(theme.primaryBackgroundColor)
+          }
         }
-      }
       NavigationLink {
         List {
           ForEach(viewModel.suggestedAccounts) { account in
@@ -118,24 +142,24 @@ public struct ExploreView: View {
         .scrollContentBackground(.hidden)
         .background(theme.primaryBackgroundColor)
         .listStyle(.plain)
-        .navigationTitle("Suggested Users")
+        .navigationTitle("explore.section.suggested-users")
         .navigationBarTitleDisplayMode(.inline)
       } label: {
-        Text("See more")
+        Text("see-more")
           .foregroundColor(theme.tintColor)
       }
       .listRowBackground(theme.primaryBackgroundColor)
     }
   }
-  
+
   private var trendingTagsSection: some View {
-    Section("Trending Tags") {
+    Section("explore.section.trending.tags") {
       ForEach(viewModel.trendingTags
         .prefix(upTo: viewModel.trendingTags.count > 5 ? 5 : viewModel.trendingTags.count)) { tag in
-        TagRowView(tag: tag)
+          TagRowView(tag: tag)
             .listRowBackground(theme.primaryBackgroundColor)
-          .padding(.vertical, 4)
-      }
+            .padding(.vertical, 4)
+        }
       NavigationLink {
         List {
           ForEach(viewModel.trendingTags) { tag in
@@ -147,25 +171,25 @@ public struct ExploreView: View {
         .scrollContentBackground(.hidden)
         .background(theme.primaryBackgroundColor)
         .listStyle(.plain)
-        .navigationTitle("Trending Tags")
+        .navigationTitle("explore.section.trending.tags")
         .navigationBarTitleDisplayMode(.inline)
       } label: {
-        Text("See more")
+        Text("see-more")
           .foregroundColor(theme.tintColor)
       }
       .listRowBackground(theme.primaryBackgroundColor)
     }
   }
-  
+
   private var trendingPostsSection: some View {
-    Section("Trending Posts") {
+    Section("explore.section.trending.posts") {
       ForEach(viewModel.trendingStatuses
         .prefix(upTo: viewModel.trendingStatuses.count > 3 ? 3 : viewModel.trendingStatuses.count)) { status in
-        StatusRowView(viewModel: .init(status: status, isCompact: false))
+          StatusRowView(viewModel: .init(status: status, isCompact: false))
             .listRowBackground(theme.primaryBackgroundColor)
-          .padding(.vertical, 8)
-      }
-      
+            .padding(.vertical, 8)
+        }
+
       NavigationLink {
         List {
           ForEach(viewModel.trendingStatuses) { status in
@@ -177,24 +201,24 @@ public struct ExploreView: View {
         .scrollContentBackground(.hidden)
         .background(theme.primaryBackgroundColor)
         .listStyle(.plain)
-        .navigationTitle("Trending Posts")
+        .navigationTitle("explore.section.trending.posts")
         .navigationBarTitleDisplayMode(.inline)
       } label: {
-        Text("See more")
+        Text("see-more")
           .foregroundColor(theme.tintColor)
       }
       .listRowBackground(theme.primaryBackgroundColor)
     }
   }
-  
+
   private var trendingLinksSection: some View {
-    Section("Trending Links") {
+    Section("explore.section.trending.links") {
       ForEach(viewModel.trendingLinks
         .prefix(upTo: viewModel.trendingLinks.count > 3 ? 3 : viewModel.trendingLinks.count)) { card in
-        StatusCardView(card: card)
+          StatusCardView(card: card)
             .listRowBackground(theme.primaryBackgroundColor)
-          .padding(.vertical, 8)
-      }
+            .padding(.vertical, 8)
+        }
       NavigationLink {
         List {
           ForEach(viewModel.trendingLinks) { card in
@@ -206,14 +230,13 @@ public struct ExploreView: View {
         .scrollContentBackground(.hidden)
         .background(theme.primaryBackgroundColor)
         .listStyle(.plain)
-        .navigationTitle("Trending Links")
+        .navigationTitle("explore.section.trending.links")
         .navigationBarTitleDisplayMode(.inline)
       } label: {
-        Text("See more")
+        Text("see-more")
           .foregroundColor(theme.tintColor)
       }
       .listRowBackground(theme.primaryBackgroundColor)
     }
   }
-  
 }

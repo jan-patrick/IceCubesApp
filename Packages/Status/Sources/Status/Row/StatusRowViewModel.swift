@@ -1,7 +1,7 @@
-import SwiftUI
+import Env
 import Models
 import Network
-import Env
+import SwiftUI
 
 @MainActor
 public class StatusRowViewModel: ObservableObject {
@@ -9,72 +9,111 @@ public class StatusRowViewModel: ObservableObject {
   let isCompact: Bool
   let isFocused: Bool
   let isRemote: Bool
-  
-  @Published var favouritesCount: Int
-  @Published var isFavourited: Bool
+  let showActions: Bool
+
+  @Published var favoritesCount: Int
+  @Published var isFavorited: Bool
   @Published var isReblogged: Bool
   @Published var isPinned: Bool
   @Published var isBookmarked: Bool
   @Published var reblogsCount: Int
   @Published var repliesCount: Int
-  @Published var embededStatus: Status?
+  @Published var embeddedStatus: Status?
   @Published var displaySpoiler: Bool = false
-  @Published var isEmbedLoading: Bool = true
+  @Published var isEmbedLoading: Bool = false
   @Published var isFiltered: Bool = false
-  
+  @Published var isLoadingRemoteContent: Bool = false
+
+  @Published var translation: String?
+  @Published var isLoadingTranslation: Bool = false
+
   var filter: Filtered? {
     status.reblog?.filtered?.first ?? status.filtered?.first
   }
-  
+
   var client: Client?
-  
+
   public init(status: Status,
               isCompact: Bool = false,
               isFocused: Bool = false,
-              isRemote: Bool = false) {
+              isRemote: Bool = false,
+              showActions: Bool = true)
+  {
     self.status = status
     self.isCompact = isCompact
     self.isFocused = isFocused
     self.isRemote = isRemote
+    self.showActions = showActions
     if let reblog = status.reblog {
-      self.isFavourited = reblog.favourited == true
-      self.isReblogged = reblog.reblogged == true
-      self.isPinned = reblog.pinned == true
-      self.isBookmarked = reblog.bookmarked == true
+      isFavorited = reblog.favourited == true
+      isReblogged = reblog.reblogged == true
+      isPinned = reblog.pinned == true
+      isBookmarked = reblog.bookmarked == true
     } else {
-      self.isFavourited = status.favourited == true
-      self.isReblogged = status.reblogged == true
-      self.isPinned = status.pinned == true
-      self.isBookmarked = status.bookmarked == true
+      isFavorited = status.favourited == true
+      isReblogged = status.reblogged == true
+      isPinned = status.pinned == true
+      isBookmarked = status.bookmarked == true
     }
-    self.favouritesCount = status.reblog?.favouritesCount ?? status.favouritesCount
-    self.reblogsCount = status.reblog?.reblogsCount ?? status.reblogsCount
-    self.repliesCount = status.reblog?.repliesCount ?? status.repliesCount
-    self.displaySpoiler = !(status.reblog?.spoilerText ?? status.spoilerText).isEmpty
-    
-    self.isFiltered = filter != nil
+    favoritesCount = status.reblog?.favouritesCount ?? status.favouritesCount
+    reblogsCount = status.reblog?.reblogsCount ?? status.reblogsCount
+    repliesCount = status.reblog?.repliesCount ?? status.repliesCount
+    displaySpoiler = !(status.reblog?.spoilerText.asRawText ?? status.spoilerText.asRawText).isEmpty
+
+    isFiltered = filter != nil
+  }
+
+  func navigateToDetail(routerPath: RouterPath) {
+    guard !isFocused else { return }
+    if isRemote, let url = URL(string: status.reblog?.url ?? status.url ?? "") {
+      routerPath.navigate(to: .remoteStatusDetail(url: url))
+    } else {
+      routerPath.navigate(to: .statusDetail(id: status.reblog?.id ?? status.id))
+    }
   }
   
-  func navigateToDetail(routeurPath: RouterPath) {
-    if isRemote, let url = status.reblog?.url ?? status.url {
-      routeurPath.navigate(to: .remoteStatusDetail(url: url))
+  func navigateToAccountDetail(account: Account, routerPath: RouterPath) {
+    if isRemote, let url = account.url {
+      withAnimation {
+        isLoadingRemoteContent = true
+      }
+      Task {
+        await routerPath.navigateToAccountFrom(url: url)
+        isLoadingRemoteContent = false
+      }
     } else {
-      routeurPath.navigate(to: .statusDetail(id: status.reblog?.id ?? status.id))
+      routerPath.navigate(to: .accountDetailWithAccount(account: account))
     }
   }
   
-  func loadEmbededStatus() async {
+  func navigateToMention(mention: Mention, routerPath: RouterPath) {
+    if isRemote {
+      withAnimation {
+        isLoadingRemoteContent = true
+      }
+      Task {
+        await routerPath.navigateToAccountFrom(url: mention.url)
+        isLoadingRemoteContent = false
+      }
+    } else {
+      routerPath.navigate(to: .accountDetail(id: mention.id))
+    }
+  }
+
+  func loadEmbeddedStatus() async {
     guard let client,
-          let urls = status.content.findStatusesURLs(),
-          !urls.isEmpty,
-          let url = urls.first else {
-      isEmbedLoading = false
+          embeddedStatus == nil,
+          !status.content.statusesURLs.isEmpty,
+          let url = status.content.statusesURLs.first,
+          client.hasConnection(with: url)
+    else {
+      if isEmbedLoading {
+        isEmbedLoading = false
+      }
       return
     }
     do {
-      withAnimation {
-        isEmbedLoading = true
-      }
+      isEmbedLoading = true
       var embed: Status?
       if url.absoluteString.contains(client.server), let id = Int(url.lastPathComponent) {
         embed = try await client.get(endpoint: Statuses.status(id: String(id)))
@@ -83,44 +122,44 @@ public class StatusRowViewModel: ObservableObject {
                                                                                   type: "statuses",
                                                                                   offset: 0,
                                                                                   following: nil),
-                                                            forceVersion: .v2)
+                                                          forceVersion: .v2)
         embed = results.statuses.first
       }
       withAnimation {
-        embededStatus = embed
+        embeddedStatus = embed
         isEmbedLoading = false
       }
     } catch {
       isEmbedLoading = false
     }
   }
-  
-  func favourite() async {
+
+  func favorite() async {
     guard let client, client.isAuth else { return }
-    isFavourited = true
-    favouritesCount += 1
+    isFavorited = true
+    favoritesCount += 1
     do {
-      let status: Status = try await client.post(endpoint: Statuses.favourite(id: status.reblog?.id ?? status.id))
+      let status: Status = try await client.post(endpoint: Statuses.favorite(id: status.reblog?.id ?? status.id))
       updateFromStatus(status: status)
     } catch {
-      isFavourited = false
-      favouritesCount -= 1
+      isFavorited = false
+      favoritesCount -= 1
     }
   }
-  
-  func unFavourite() async {
+
+  func unFavorite() async {
     guard let client, client.isAuth else { return }
-    isFavourited = false
-    favouritesCount -= 1
+    isFavorited = false
+    favoritesCount -= 1
     do {
-      let status: Status = try await client.post(endpoint: Statuses.unfavourite(id: status.reblog?.id ?? status.id))
+      let status: Status = try await client.post(endpoint: Statuses.unfavorite(id: status.reblog?.id ?? status.id))
       updateFromStatus(status: status)
     } catch {
-      isFavourited = true
-      favouritesCount += 1
+      isFavorited = true
+      favoritesCount += 1
     }
   }
-  
+
   func reblog() async {
     guard let client, client.isAuth else { return }
     isReblogged = true
@@ -133,7 +172,7 @@ public class StatusRowViewModel: ObservableObject {
       reblogsCount -= 1
     }
   }
-  
+
   func unReblog() async {
     guard let client, client.isAuth else { return }
     isReblogged = false
@@ -146,7 +185,7 @@ public class StatusRowViewModel: ObservableObject {
       reblogsCount += 1
     }
   }
-  
+
   func pin() async {
     guard let client, client.isAuth else { return }
     isPinned = true
@@ -157,7 +196,7 @@ public class StatusRowViewModel: ObservableObject {
       isPinned = false
     }
   }
-  
+
   func unPin() async {
     guard let client, client.isAuth else { return }
     isPinned = false
@@ -168,7 +207,7 @@ public class StatusRowViewModel: ObservableObject {
       isPinned = true
     }
   }
-  
+
   func bookmark() async {
     guard let client, client.isAuth else { return }
     isBookmarked = true
@@ -179,7 +218,7 @@ public class StatusRowViewModel: ObservableObject {
       isBookmarked = false
     }
   }
-  
+
   func unbookmark() async {
     guard let client, client.isAuth else { return }
     isBookmarked = false
@@ -190,28 +229,44 @@ public class StatusRowViewModel: ObservableObject {
       isBookmarked = true
     }
   }
-  
+
   func delete() async {
     guard let client else { return }
     do {
       _ = try await client.delete(endpoint: Statuses.status(id: status.id))
-    } catch { }
+    } catch {}
   }
-  
+
   private func updateFromStatus(status: Status) {
     if let reblog = status.reblog {
-      isFavourited = reblog.favourited == true
+      isFavorited = reblog.favourited == true
       isReblogged = reblog.reblogged == true
       isPinned = reblog.pinned == true
       isBookmarked = reblog.bookmarked == true
     } else {
-      isFavourited = status.favourited == true
+      isFavorited = status.favourited == true
       isReblogged = status.reblogged == true
       isPinned = status.pinned == true
       isBookmarked = status.bookmarked == true
     }
-    favouritesCount = status.reblog?.favouritesCount ?? status.favouritesCount
+    favoritesCount = status.reblog?.favouritesCount ?? status.favouritesCount
     reblogsCount = status.reblog?.reblogsCount ?? status.reblogsCount
     repliesCount = status.reblog?.repliesCount ?? status.repliesCount
+  }
+
+  func translate(userLang: String) async {
+    let client = DeepLClient()
+    do {
+      withAnimation {
+        isLoadingTranslation = true
+      }
+      let translation = try await client.request(target: userLang,
+                                                 source: status.language,
+                                                 text: status.reblog?.content.asRawText ?? status.content.asRawText)
+      withAnimation {
+        self.translation = translation
+        isLoadingTranslation = false
+      }
+    } catch {}
   }
 }

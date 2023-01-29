@@ -3,6 +3,13 @@ import Foundation
 public protocol Endpoint {
   func path() -> String
   func queryItems() -> [URLQueryItem]?
+  var jsonValue: Encodable? { get }
+}
+
+public extension Endpoint {
+  var jsonValue: Encodable? {
+    nil
+  }
 }
 
 extension Endpoint {

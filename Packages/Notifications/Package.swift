@@ -5,13 +5,15 @@ import PackageDescription
 
 let package = Package(
   name: "Notifications",
+  defaultLocalization: "en",
   platforms: [
     .iOS(.v16),
   ],
   products: [
     .library(
       name: "Notifications",
-      targets: ["Notifications"]),
+      targets: ["Notifications"]
+    ),
   ],
   dependencies: [
     .package(name: "Network", path: "../Network"),
@@ -28,8 +30,8 @@ let package = Package(
         .product(name: "Models", package: "Models"),
         .product(name: "Env", package: "Env"),
         .product(name: "Status", package: "Status"),
-        .product(name: "DesignSystem", package: "DesignSystem")
-      ]),
+        .product(name: "DesignSystem", package: "DesignSystem"),
+      ]
+    ),
   ]
 )
-

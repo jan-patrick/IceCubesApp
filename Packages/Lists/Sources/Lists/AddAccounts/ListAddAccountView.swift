@@ -1,8 +1,8 @@
-import SwiftUI
-import Network
 import DesignSystem
 import Env
 import Models
+import Network
+import SwiftUI
 
 public struct ListAddAccountView: View {
   @Environment(\.dismiss) private var dismiss
@@ -10,15 +10,14 @@ public struct ListAddAccountView: View {
   @EnvironmentObject private var theme: Theme
   @EnvironmentObject private var currentAccount: CurrentAccount
   @StateObject private var viewModel: ListAddAccountViewModel
-  
+
   @State private var isCreateListAlertPresented: Bool = false
   @State private var createListTitle: String = ""
-  
-  
+
   public init(account: Account) {
     _viewModel = StateObject(wrappedValue: .init(account: account))
   }
-  
+
   public var body: some View {
     NavigationStack {
       List {
@@ -40,29 +39,29 @@ public struct ListAddAccountView: View {
           }
           .listRowBackground(theme.primaryBackgroundColor)
         }
-        Button("Create a new list") {
+        Button("lists.create") {
           isCreateListAlertPresented = true
         }
         .listRowBackground(theme.primaryBackgroundColor)
       }
       .scrollContentBackground(.hidden)
       .background(theme.secondaryBackgroundColor)
-      .navigationTitle("Add/Remove \(viewModel.account.displayName)")
+      .navigationTitle("lists.add-remove-\(viewModel.account.displayName)")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem {
-          Button("Done") {
+          Button("action.done") {
             dismiss()
           }
         }
       }
-      .alert("Create a new list", isPresented: $isCreateListAlertPresented) {
-        TextField("List name", text: $createListTitle)
-        Button("Cancel") {
+      .alert("lists.create", isPresented: $isCreateListAlertPresented) {
+        TextField("lists.name", text: $createListTitle)
+        Button("action.cancel") {
           isCreateListAlertPresented = false
           createListTitle = ""
         }
-        Button("Create List") {
+        Button("lists.create.confirm") {
           guard !createListTitle.isEmpty else { return }
           isCreateListAlertPresented = false
           Task {
@@ -71,7 +70,7 @@ public struct ListAddAccountView: View {
           }
         }
       } message: {
-        Text("Enter the name for your list")
+        Text("lists.name.message")
       }
     }
     .task {

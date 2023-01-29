@@ -1,25 +1,27 @@
+import Env
 import Foundation
 import SwiftUI
-import Env
 
 struct StatusRowContextMenu: View {
+  @EnvironmentObject private var preferences: UserPreferences
   @EnvironmentObject private var account: CurrentAccount
-  @EnvironmentObject private var routeurPath: RouterPath
-    
+  @EnvironmentObject private var currentInstance: CurrentInstance
+  @EnvironmentObject private var routerPath: RouterPath
+
   @Environment(\.openURL) var openURL
-    
+
   @ObservedObject var viewModel: StatusRowViewModel
-  
+
   var body: some View {
     if !viewModel.isRemote {
       Button { Task {
-        if viewModel.isFavourited {
-          await viewModel.unFavourite()
+        if viewModel.isFavorited {
+          await viewModel.unFavorite()
         } else {
-          await viewModel.favourite()
+          await viewModel.favorite()
         }
       } } label: {
-        Label(viewModel.isFavourited ? "Unfavorite" : "Favorite", systemImage: "star")
+        Label(viewModel.isFavorited ? "status.action.unfavorite" : "status.action.favorite", systemImage: "star")
       }
       Button { Task {
         if viewModel.isReblogged {
@@ -28,7 +30,7 @@ struct StatusRowContextMenu: View {
           await viewModel.reblog()
         }
       } } label: {
-        Label(viewModel.isReblogged ? "Unboost" : "Boost", systemImage: "arrow.left.arrow.right.circle")
+        Label(viewModel.isReblogged ? "status.action.unboost" : "status.action.boost", systemImage: "arrow.left.arrow.right.circle")
       }
       Button { Task {
         if viewModel.isBookmarked {
@@ -37,46 +39,58 @@ struct StatusRowContextMenu: View {
           await viewModel.bookmark()
         }
       } } label: {
-        Label(viewModel.isReblogged ? "Unbookmark" : "Bookmark",
+        Label(viewModel.isBookmarked ? "status.action.unbookmark" : "status.action.bookmark",
               systemImage: "bookmark")
       }
       Button {
-        routeurPath.presentedSheet = .replyToStatusEditor(status: viewModel.status)
+        routerPath.presentedSheet = .replyToStatusEditor(status: viewModel.status)
       } label: {
-        Label("Reply", systemImage: "arrowshape.turn.up.left")
+        Label("status.action.reply", systemImage: "arrowshape.turn.up.left")
       }
     }
-    
+
     if viewModel.status.visibility == .pub, !viewModel.isRemote {
       Button {
-        routeurPath.presentedSheet = .quoteStatusEditor(status: viewModel.status)
+        routerPath.presentedSheet = .quoteStatusEditor(status: viewModel.status)
       } label: {
-        Label("Quote this post", systemImage: "quote.bubble")
+        Label("status.action.quote", systemImage: "quote.bubble")
       }
     }
-      
+
     Divider()
-    
+
     if let url = viewModel.status.reblog?.url ?? viewModel.status.url {
-        ShareLink(item: url) {
-            Label("Share this post", systemImage: "square.and.arrow.up")
-        }
-    }
-      
-    if let url = viewModel.status.reblog?.url ?? viewModel.status.url {
-      Button { openURL(url) } label: {
-        Label("View in Browser", systemImage: "safari")
+      ShareLink(item: url) {
+        Label("status.action.share", systemImage: "square.and.arrow.up")
       }
     }
-    
+
+    if let url = URL(string: viewModel.status.reblog?.url ?? viewModel.status.url ?? "") {
+      Button { openURL(url) } label: {
+        Label("status.action.view-in-browser", systemImage: "safari")
+      }
+    }
+
     Button {
       UIPasteboard.general.string = viewModel.status.content.asRawText
     } label: {
-      Label("Copy Text", systemImage: "doc.on.doc")
+      Label("status.action.copy-text", systemImage: "doc.on.doc")
+    }
+
+    if let lang = preferences.serverPreferences?.postLanguage ?? Locale.current.language.languageCode?.identifier,
+       viewModel.status.language != lang
+    {
+      Button {
+        Task {
+          await viewModel.translate(userLang: lang)
+        }
+      } label: {
+        Label("status.action.translate", systemImage: "captions.bubble")
+      }
     }
 
     if account.account?.id == viewModel.status.account.id {
-      Section("Your post") {
+      Section("status.action.section.your-post") {
         Button {
           Task {
             if viewModel.isPinned {
@@ -86,28 +100,30 @@ struct StatusRowContextMenu: View {
             }
           }
         } label: {
-          Label(viewModel.isPinned ? "Unpin": "Pin", systemImage: viewModel.isPinned ? "pin.fill" : "pin")
+          Label(viewModel.isPinned ? "status.action.unpin" : "status.action.pin", systemImage: viewModel.isPinned ? "pin.fill" : "pin")
         }
-        Button {
-          routeurPath.presentedSheet = .editStatusEditor(status: viewModel.status)
-        } label: {
-          Label("Edit", systemImage: "pencil")
+        if currentInstance.isEditSupported {
+          Button {
+            routerPath.presentedSheet = .editStatusEditor(status: viewModel.status)
+          } label: {
+            Label("status.action.edit", systemImage: "pencil")
+          }
         }
         Button(role: .destructive) { Task { await viewModel.delete() } } label: {
-          Label("Delete", systemImage: "trash")
+          Label("status.action.delete", systemImage: "trash")
         }
       }
     } else if !viewModel.isRemote {
       Section(viewModel.status.account.acct) {
         Button {
-          routeurPath.presentedSheet = .mentionStatusEditor(account: viewModel.status.account, visibility: .pub)
+          routerPath.presentedSheet = .mentionStatusEditor(account: viewModel.status.account, visibility: .pub)
         } label: {
-          Label("Mention", systemImage: "at")
+          Label("status.action.mention", systemImage: "at")
         }
         Button {
-          routeurPath.presentedSheet = .mentionStatusEditor(account: viewModel.status.account, visibility: .direct)
+          routerPath.presentedSheet = .mentionStatusEditor(account: viewModel.status.account, visibility: .direct)
         } label: {
-          Label("Message", systemImage: "tray.full")
+          Label("status.action.message", systemImage: "tray.full")
         }
       }
     }

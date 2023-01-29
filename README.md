@@ -1,36 +1,9 @@
 # IceCubesApp
 
-[Public TestFlight beta](https://testflight.apple.com/join/tqI3dK1u) (A proper App Store release will come eventually)
+[You can now download it on the App Store](https://apps.apple.com/us/app/ice-cubes-for-mastodon/id6444915884)
 
-<p float="left">
-    <img src="Images/image1.png" width="300" />
-    <img src="Images/image2.png" width="300" />
-</p>
-<p float="left">
-    <img src="Images/image3.png" width="300" />
-    <img src="Images/image4.png" width="300" />
-</p>
-<p float="left">
-    <img src="Images/image5.png" width="300" />
-    <img src="Images/image6.png" width="300" />
-</p>
 
-For contributors and myself, here is a todo list of features that could be added (while giving you a good idea of what's already done if not in this list, the app is quite complete already!)
-
-- [ ] Editor: Add / Edit polls
-- [ ] Editor: Support video types
-- [ ] Editor: Add photos from camera
-- [ ] Editor: Support custom emojis
-- [ ] Edit profile
-- [ ] Handle emoji in status
-- [ ] Display & Edit server side features (filter, default visibility, etc...)
-- [ ] Edit filters.
-- [ ] More context menu everywhere
-- [ ] Support IceCubesApp://any mastodon links
-- [ ] Translate button
-- [ ] Proper iPad support
-- [ ] macOS support
-
+<img src="Images/promo.png" />
 
 IceCubesApp is an open source application for accessing the decentralized social network Mastodon! It's built entirely in SwiftUI, making it fast, lightweight, and easy to use.
 
@@ -40,10 +13,22 @@ The project is split into different Swift Packages to make it easier to manage a
 
 It's a great starting point for learning SwiftUI. The app covers many of the basic concepts of SwiftUI, such as building layouts, working with data, and handling user interaction. By exploring the code, you can gain a solid understanding of how to use SwiftUI in your daily life. Plus, the open source nature of IceCubesApp means that you can see how real-world applications are built and get a sense of best practices for using SwiftUI.
 
-The architecture is straighforward MVVM for most parts, no redux on this one ;)
+The architecture is straightforward MVVM for most parts, no redux on this one ;)
 
 Please note that IceCubesApp is currently in an early stage of development and as such, there are many features that are still missing. While the app is functional and can be used to browse and interact with Mastodon, there are still many features that are planned for the future.
 
 Thanks!
 
 ![Icon](IceCubesApp/Assets.xcassets/AppIcon.appiconset/icon.png?)
+
+## Building the project
+
+To build the project, you need to clone the repo and create a copy of the included `.xcconfig` file to create your config before you can compile the project. **Otherwise, you will get an error.**
+
+Here are the steps:
+
+1. Clone the repo
+2. In the same folder that contains the `IceCubesApp.xcconfig.template`, run this command:
+ - cp IceCubesApp.xcconfig.template IceCubesApp.xcconfig
+3. Fill in the `DEVELOPMENT_TEAM` and `BUNDLE_ID_PREFIX` values. The first should have your Apple Team ID (which you can find by logging into the Apple Developer Portal). The latter is your domain in reverse notation or whatever you use as the prefix for your projects.
+4. Save your changes, and then you should be able to compile the project without any issues.
