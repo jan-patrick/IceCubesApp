@@ -4,24 +4,19 @@ import SwiftUI
 
 @MainActor
 public extension View {
-  func statusEditorToolbarItem(routerPath: RouterPath, visibility: Models.Visibility) -> some ToolbarContent {
-    ToolbarItem(placement: .navigationBarTrailing) {
-      Button {
-        let feedback = UISelectionFeedbackGenerator()
-        routerPath.presentedSheet = .newStatusEditor(visibility: visibility)
-        feedback.selectionChanged()
-      } label: {
-        Image(systemName: "square.and.pencil")
-      }
-    }
+  func statusEditorToolbarItem(routerPath _: RouterPath,
+                               visibility: Models.Visibility) -> some ToolbarContent
+  {
+    StatusEditorToolbarItem(visibility: visibility)
   }
 }
 
+@MainActor
 public struct StatusEditorToolbarItem: ToolbarContent {
-  @EnvironmentObject private var routerPath: RouterPath
+  @Environment(\.openWindow) private var openWindow
+  @Environment(RouterPath.self) private var routerPath
 
   let visibility: Models.Visibility
-  let feedbackGenerator = UISelectionFeedbackGenerator()
 
   public init(visibility: Models.Visibility) {
     self.visibility = visibility
@@ -30,10 +25,42 @@ public struct StatusEditorToolbarItem: ToolbarContent {
   public var body: some ToolbarContent {
     ToolbarItem(placement: .navigationBarTrailing) {
       Button {
-        routerPath.presentedSheet = .newStatusEditor(visibility: visibility)
-        feedbackGenerator.selectionChanged()
+        Task { @MainActor in
+          #if targetEnvironment(macCatalyst)
+            openWindow(value: WindowDestinationEditor.newStatusEditor(visibility: visibility))
+          #else
+            routerPath.presentedSheet = .newStatusEditor(visibility: visibility)
+            HapticManager.shared.fireHaptic(.buttonPress)
+          #endif
+        }
       } label: {
         Image(systemName: "square.and.pencil")
+          .accessibilityLabel("accessibility.tabs.timeline.new-post.label")
+          .accessibilityInputLabels([
+            LocalizedStringKey("accessibility.tabs.timeline.new-post.label"),
+            LocalizedStringKey("accessibility.tabs.timeline.new-post.inputLabel1"),
+            LocalizedStringKey("accessibility.tabs.timeline.new-post.inputLabel2"),
+          ])
+      }
+    }
+  }
+}
+
+@MainActor
+public struct SecondaryColumnToolbarItem: ToolbarContent {
+  @Environment(\.isSecondaryColumn) private var isSecondaryColumn
+  @Environment(UserPreferences.self) private var preferences
+
+  public init() {}
+
+  public var body: some ToolbarContent {
+    ToolbarItem(placement: isSecondaryColumn ? .navigationBarLeading : .navigationBarTrailing) {
+      Button {
+        withAnimation {
+          preferences.showiPadSecondaryColumn.toggle()
+        }
+      } label: {
+        Image(systemName: "sidebar.right")
       }
     }
   }

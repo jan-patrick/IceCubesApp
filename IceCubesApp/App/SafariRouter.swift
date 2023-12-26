@@ -1,20 +1,25 @@
 import DesignSystem
 import Env
+import Models
+import Observation
 import SafariServices
 import SwiftUI
 
 extension View {
-  func withSafariRouter() -> some View {
+  @MainActor func withSafariRouter() -> some View {
     modifier(SafariRouter())
   }
 }
 
+@MainActor
 private struct SafariRouter: ViewModifier {
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var preferences: UserPreferences
-  @EnvironmentObject private var routerPath: RouterPath
+  @Environment(Theme.self) private var theme
+  @Environment(UserPreferences.self) private var preferences
+  @Environment(RouterPath.self) private var routerPath
 
-  @State private var safari: SFSafariViewController?
+  #if !os(visionOS)
+  @State private var safariManager = InAppSafariManager()
+  #endif
 
   func body(content: Content) -> some View {
     content
@@ -22,12 +27,12 @@ private struct SafariRouter: ViewModifier {
         // Open internal URL.
         routerPath.handle(url: url)
       })
-      .onOpenURL(perform: { url in
+      .onOpenURL { url in
         // Open external URL (from icecubesapp://)
-        let urlString = url.absoluteString.replacingOccurrences(of: "icecubesapp://", with: "https://")
+        let urlString = url.absoluteString.replacingOccurrences(of: AppInfo.scheme, with: "https://")
         guard let url = URL(string: urlString), url.host != nil else { return }
         _ = routerPath.handle(url: url)
-      })
+      }
       .onAppear {
         routerPath.urlHandler = { url in
           if url.absoluteString.contains("@twitter.com"), url.absoluteString.hasPrefix("mailto:") {
@@ -40,63 +45,121 @@ private struct SafariRouter: ViewModifier {
               return .handled
             }
           }
-          guard preferences.preferredBrowser == .inAppSafari, !ProcessInfo.processInfo.isiOSAppOnMac else { return .systemAction }
+          #if !targetEnvironment(macCatalyst)
+            guard preferences.preferredBrowser == .inAppSafari else { return .systemAction }
+          #endif
           // SFSafariViewController only supports initial URLs with http:// or https:// schemes.
           guard let scheme = url.scheme, ["https", "http"].contains(scheme.lowercased()) else {
             return .systemAction
           }
-
-          let safari = SFSafariViewController(url: url)
-          safari.preferredBarTintColor = UIColor(theme.primaryBackgroundColor)
-          safari.preferredControlTintColor = UIColor(theme.tintColor)
-
-          self.safari = safari
-          return .handled
+          #if os(visionOS)
+          return .systemAction
+          #else
+          return safariManager.open(url)
+          #endif
         }
       }
+      #if !os(visionOS)
       .background {
-        SafariPresenter(safari: safari)
+        WindowReader { window in
+          safariManager.windowScene = window.windowScene
+        }
       }
-  }
-
-  struct SafariPresenter: UIViewRepresentable {
-    var safari: SFSafariViewController?
-
-    func makeUIView(context _: Context) -> UIView {
-      let view = UIView(frame: .zero)
-      view.isHidden = true
-      view.isUserInteractionEnabled = false
-      return view
-    }
-
-    func updateUIView(_ uiView: UIView, context _: Context) {
-      guard let safari = safari, let viewController = uiView.findTopViewController() else { return }
-      viewController.present(safari, animated: true)
-    }
+      #endif
   }
 }
 
-private extension UIView {
-  func findTopViewController() -> UIViewController? {
-    if let nextResponder = next as? UIViewController {
-      return nextResponder.topViewController()
-    } else if let nextResponder = next as? UIView {
-      return nextResponder.findTopViewController()
-    } else {
-      return nil
+#if !os(visionOS)
+@MainActor
+@Observable private class InAppSafariManager: NSObject, SFSafariViewControllerDelegate {
+  var windowScene: UIWindowScene?
+  let viewController: UIViewController = .init()
+  var window: UIWindow?
+
+  @MainActor
+  func open(_ url: URL) -> OpenURLAction.Result {
+    guard let windowScene else { return .systemAction }
+
+    window = setupWindow(windowScene: windowScene)
+
+    let configuration = SFSafariViewController.Configuration()
+    configuration.entersReaderIfAvailable = UserPreferences.shared.inAppBrowserReaderView
+
+    let safari = SFSafariViewController(url: url, configuration: configuration)
+    safari.preferredBarTintColor = UIColor(Theme.shared.primaryBackgroundColor)
+    safari.preferredControlTintColor = UIColor(Theme.shared.tintColor)
+    safari.delegate = self
+
+    DispatchQueue.main.async { [weak self] in
+      self?.viewController.present(safari, animated: true)
+    }
+
+    return .handled
+  }
+
+  func setupWindow(windowScene: UIWindowScene) -> UIWindow {
+    let window = window ?? UIWindow(windowScene: windowScene)
+
+    window.rootViewController = viewController
+    window.makeKeyAndVisible()
+
+    switch Theme.shared.selectedScheme {
+    case .dark:
+      window.overrideUserInterfaceStyle = .dark
+    case .light:
+      window.overrideUserInterfaceStyle = .light
+    }
+
+    self.window = window
+    return window
+  }
+
+  nonisolated func safariViewControllerDidFinish(_: SFSafariViewController) {
+    Task { @MainActor in
+      window?.resignKey()
+      window?.isHidden = false
+      window = nil
     }
   }
 }
+#endif
 
-private extension UIViewController {
-  func topViewController() -> UIViewController? {
-    if let nvc = self as? UINavigationController {
-      return nvc.visibleViewController?.topViewController()
-    } else if let tbc = self as? UITabBarController, let selected = tbc.selectedViewController {
-      return selected.topViewController()
-    } else if let presented = presentedViewController {
-      return presented.topViewController()
+private struct WindowReader: UIViewRepresentable {
+  var onUpdate: (UIWindow) -> Void
+
+  func makeUIView(context _: Context) -> InjectView {
+    InjectView(onUpdate: onUpdate)
+  }
+
+  func updateUIView(_: InjectView, context _: Context) {}
+
+  class InjectView: UIView {
+    var onUpdate: (UIWindow) -> Void
+
+    init(onUpdate: @escaping (UIWindow) -> Void) {
+      self.onUpdate = onUpdate
+      super.init(frame: .zero)
+      isHidden = true
+      isUserInteractionEnabled = false
     }
-    return self
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+      fatalError("init(coder:) has not been implemented")
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+      super.willMove(toWindow: newWindow)
+
+      if let window = newWindow {
+        onUpdate(window)
+      } else {
+        DispatchQueue.main.async { [weak self] in
+          if let window = self?.window {
+            self?.onUpdate(window)
+          }
+        }
+      }
+    }
   }
 }

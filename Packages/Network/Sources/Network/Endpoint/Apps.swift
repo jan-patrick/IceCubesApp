@@ -7,14 +7,14 @@ public enum Apps: Endpoint {
   public func path() -> String {
     switch self {
     case .registerApp:
-      return "apps"
+      "apps"
     }
   }
 
   public func queryItems() -> [URLQueryItem]? {
     switch self {
     case .registerApp:
-      return [
+      [
         .init(name: "client_name", value: AppInfo.clientName),
         .init(name: "redirect_uris", value: AppInfo.scheme),
         .init(name: "scopes", value: AppInfo.scopes),

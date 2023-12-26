@@ -7,11 +7,13 @@ import NukeUI
 import Shimmer
 import SwiftUI
 
+@MainActor
 struct AddRemoteTimelineView: View {
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.modelContext) private var context
 
-  @EnvironmentObject private var preferences: UserPreferences
-  @EnvironmentObject private var theme: Theme
+  @Environment(UserPreferences.self) private var preferences
+  @Environment(Theme.self) private var theme
 
   @State private var instanceName: String = ""
   @State private var instance: Instance?
@@ -38,7 +40,7 @@ struct AddRemoteTimelineView: View {
         }
         Button {
           guard instance != nil else { return }
-          preferences.remoteLocalTimelines.append(instanceName)
+          context.insert(LocalTimeline(instance: instanceName))
           dismiss()
         } label: {
           Text("timeline.add.action.add")
@@ -50,15 +52,17 @@ struct AddRemoteTimelineView: View {
       .formStyle(.grouped)
       .navigationTitle("timeline.add-remote.title")
       .navigationBarTitleDisplayMode(.inline)
+      #if !os(visionOS)
       .scrollContentBackground(.hidden)
       .background(theme.secondaryBackgroundColor)
       .scrollDismissesKeyboard(.immediately)
+      #endif
       .toolbar {
         ToolbarItem(placement: .navigationBarLeading) {
           Button("action.cancel", action: { dismiss() })
         }
       }
-      .onChange(of: instanceName) { newValue in
+      .onChange(of: instanceName) { _, newValue in
         instanceNamePublisher.send(newValue)
       }
       .onReceive(instanceNamePublisher.debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)) { newValue in
@@ -71,7 +75,7 @@ struct AddRemoteTimelineView: View {
         isInstanceURLFieldFocused = true
         let client = InstanceSocialClient()
         Task {
-          self.instances = await client.fetchInstances()
+          instances = await client.fetchInstances()
         }
       }
     }
@@ -85,7 +89,7 @@ struct AddRemoteTimelineView: View {
       } else {
         ForEach(instanceName.isEmpty ? instances : instances.filter { $0.name.contains(instanceName.lowercased()) }) { instance in
           Button {
-            self.instanceName = instance.name
+            instanceName = instance.name
           } label: {
             VStack(alignment: .leading, spacing: 4) {
               Text(instance.name)
@@ -93,13 +97,13 @@ struct AddRemoteTimelineView: View {
                 .foregroundColor(.primary)
               Text(instance.info?.shortDescription ?? "")
                 .font(.scaledBody)
-                .foregroundColor(.gray)
+                .foregroundStyle(Color.secondary)
 
               (Text("instance.list.users-\(instance.users)")
                 + Text("  ⸱  ")
                 + Text("instance.list.posts-\(instance.statuses)"))
                 .font(.scaledFootnote)
-                .foregroundColor(.gray)
+                .foregroundStyle(Color.secondary)
             }
           }
           .listRowBackground(theme.primaryBackgroundColor)

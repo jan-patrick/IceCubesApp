@@ -6,7 +6,7 @@ public struct Filtered: Codable, Equatable, Hashable {
 }
 
 public struct Filter: Codable, Identifiable, Equatable, Hashable {
-  public enum Action: String, Codable {
+  public enum Action: String, Codable, Equatable {
     case warn, hide
   }
 
@@ -20,3 +20,8 @@ public struct Filter: Codable, Identifiable, Equatable, Hashable {
   public let context: [String]
   public let filterAction: Action
 }
+
+extension Filtered: Sendable {}
+extension Filter: Sendable {}
+extension Filter.Action: Sendable {}
+extension Filter.Context: Sendable {}

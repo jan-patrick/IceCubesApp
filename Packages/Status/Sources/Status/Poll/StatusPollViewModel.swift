@@ -1,17 +1,19 @@
+import Combine
 import Models
 import Network
+import Observation
 import SwiftUI
 
 @MainActor
-public class StatusPollViewModel: ObservableObject {
+@Observable public class StatusPollViewModel {
   public var client: Client?
   public var instance: Instance?
 
-  @Published var poll: Poll
-  @Published var votes: [Int] = []
+  var poll: Poll
+  var votes: [Int] = []
 
   var showResults: Bool {
-    !votes.isEmpty || poll.expired
+    poll.ownVotes?.isEmpty == false || poll.expired
   }
 
   public init(poll: Poll) {
@@ -36,6 +38,18 @@ public class StatusPollViewModel: ObservableObject {
       }
     } catch {
       print(error)
+    }
+  }
+
+  public func handleSelection(_ pollIndex: Int) {
+    if poll.multiple {
+      if let voterIndex = votes.firstIndex(of: pollIndex) {
+        votes.remove(at: voterIndex)
+      } else {
+        votes.append(pollIndex)
+      }
+    } else {
+      votes = [pollIndex]
     }
   }
 }

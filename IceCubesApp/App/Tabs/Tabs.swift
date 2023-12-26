@@ -1,15 +1,17 @@
 import Account
+import DesignSystem
 import Explore
 import Foundation
 import Status
 import SwiftUI
 
+@MainActor
 enum Tab: Int, Identifiable, Hashable {
   case timeline, notifications, mentions, explore, messages, settings, other
   case trending, federated, local
   case profile
 
-  var id: Int {
+  nonisolated var id: Int {
     rawValue
   }
 
@@ -18,10 +20,13 @@ enum Tab: Int, Identifiable, Hashable {
   }
 
   static func loggedInTabs() -> [Tab] {
-    if UIDevice.current.userInterfaceIdiom == .pad || UIDevice.current.userInterfaceIdiom == .mac {
-      return [.timeline, .trending, .federated, .local, .notifications, .mentions, .explore, .messages, .settings]
+    if UIDevice.current.userInterfaceIdiom == .pad ||
+        UIDevice.current.userInterfaceIdiom == .mac {
+      [.timeline, .trending, .federated, .local, .notifications, .mentions, .explore, .messages, .settings]
+    } else if  UIDevice.current.userInterfaceIdiom == .vision {
+      [.profile, .timeline, .trending, .federated, .local, .notifications, .mentions, .explore, .messages, .settings]
     } else {
-      return [.timeline, .notifications, .explore, .messages, .profile]
+      [.timeline, .notifications, .explore, .messages, .profile]
     }
   }
 
@@ -45,7 +50,7 @@ enum Tab: Int, Identifiable, Hashable {
     case .messages:
       MessagesTab(popToRootTab: popToRootTab)
     case .settings:
-      SettingsTabs(popToRootTab: popToRootTab)
+      SettingsTabs(popToRootTab: popToRootTab, isModal: false)
     case .profile:
       ProfileTab(popToRootTab: popToRootTab)
     case .other:
@@ -84,27 +89,27 @@ enum Tab: Int, Identifiable, Hashable {
   var iconName: String {
     switch self {
     case .timeline:
-      return "rectangle.on.rectangle"
+      "rectangle.stack"
     case .trending:
-      return "chart.line.uptrend.xyaxis"
+      "chart.line.uptrend.xyaxis"
     case .local:
-      return "person.2"
+      "person.2"
     case .federated:
-      return "globe.americas"
+      "globe.americas"
     case .notifications:
-      return "bell"
+      "bell"
     case .mentions:
-      return "at"
+      "at"
     case .explore:
-      return "magnifyingglass"
+      "magnifyingglass"
     case .messages:
-      return "tray"
+      "tray"
     case .settings:
-      return "gear"
+      "gear"
     case .profile:
-      return "person.crop.circle"
+      "person.crop.circle"
     case .other:
-      return ""
+      ""
     }
   }
 }

@@ -1,21 +1,30 @@
 {
   "pins" : [
     {
+      "identity" : "bodega",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mergesort/Bodega",
+      "state" : {
+        "revision" : "f0554077c178088ba11557bbdbb71775cc6a1b84",
+        "version" : "2.1.0"
+      }
+    },
+    {
       "identity" : "emojitext",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/divadretlaw/EmojiText",
       "state" : {
-        "revision" : "3d8f6196de59634352ed317cf6ab4e292eeaaf44",
-        "version" : "1.2.0"
+        "revision" : "d0664390e3236ff6241ea0586d80f4e92702973b",
+        "version" : "3.2.1"
       }
     },
     {
-      "identity" : "html2markdown",
+      "identity" : "giphy-ios-sdk",
       "kind" : "remoteSourceControl",
-      "location" : "https://gitlab.com/mflint/HTML2Markdown",
+      "location" : "https://github.com/Giphy/giphy-ios-sdk",
       "state" : {
-        "revision" : "00d7a9744bbd1e7762c587bbd248775e16345a65",
-        "version" : "1.0.0"
+        "revision" : "95c32b862185e76107841b49bfff8ff7230f3b68",
+        "version" : "2.2.7"
       }
     },
     {
@@ -24,7 +33,25 @@
       "location" : "https://github.com/evgenyneu/keychain-swift",
       "state" : {
         "branch" : "master",
-        "revision" : "e43f9b99b172ae6a7253047f8ba95c7a0b05b99f"
+        "revision" : "f38cb0ada97847ac5068b915b8d2793b35435668"
+      }
+    },
+    {
+      "identity" : "libwebp-xcode",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SDWebImage/libwebp-Xcode",
+      "state" : {
+        "revision" : "b2b1d20a90b14d11f6ef4241da6b81c1d3f171e4",
+        "version" : "1.3.2"
+      }
+    },
+    {
+      "identity" : "lrucache",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/nicklockwood/LRUCache",
+      "state" : {
+        "revision" : "6d2b5246c9c98dcd498552bb22f08d55b12a8371",
+        "version" : "1.0.4"
       }
     },
     {
@@ -32,8 +59,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/kean/Nuke",
       "state" : {
-        "revision" : "2e9337168d08acccf72c039bf9324be24a1cf7d7",
-        "version" : "11.5.3"
+        "revision" : "1694798e876113d44f6ec6ead965d7286695981d",
+        "version" : "12.2.0"
       }
     },
     {
@@ -41,8 +68,26 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/RevenueCat/purchases-ios.git",
       "state" : {
-        "revision" : "9cfb6adb41dc40d80c104b2ef6e9a84bca03ea48",
-        "version" : "4.16.0"
+        "revision" : "b8d20ba1c8e13cc73d72e37cf98607d01fd357b6",
+        "version" : "4.31.2"
+      }
+    },
+    {
+      "identity" : "sfsafesymbols",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/SFSafeSymbols/SFSafeSymbols",
+      "state" : {
+        "revision" : "7cca2d60925876b5953a2cf7341cd80fbeac983c",
+        "version" : "4.1.1"
+      }
+    },
+    {
+      "identity" : "sqlite.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stephencelis/SQLite.swift.git",
+      "state" : {
+        "revision" : "7a2e3cd27de56f6d396e84f63beefd0267b55ccb",
+        "version" : "0.14.1"
       }
     },
     {
@@ -50,8 +95,17 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/scinfu/SwiftSoup.git",
       "state" : {
-        "revision" : "f707b8680cddb96dc1855632340a572ef37bbb98",
-        "version" : "2.5.3"
+        "revision" : "8b6cf29eead8841a1fa7822481cb3af4ddaadba6",
+        "version" : "2.6.1"
+      }
+    },
+    {
+      "identity" : "swiftui-introspect",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/siteline/SwiftUI-Introspect.git",
+      "state" : {
+        "revision" : "9e1cc02a65b22e09a8251261cccbccce02731fc5",
+        "version" : "1.1.1"
       }
     },
     {
@@ -61,15 +115,6 @@
       "state" : {
         "revision" : "965a7cbcbf094cbcf22b9251a2323bdc3432e171",
         "version" : "1.1.0"
-      }
-    },
-    {
-      "identity" : "textview",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Dimillian/TextView",
-      "state" : {
-        "branch" : "main",
-        "revision" : "4353041d4412fde05748e7dc362396477a0e24a5"
       }
     }
   ],

@@ -1,4 +1,4 @@
-// swift-tools-version: 5.7
+// swift-tools-version: 5.9
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -7,7 +7,8 @@ let package = Package(
   name: "Status",
   defaultLocalization: "en",
   platforms: [
-    .iOS(.v16),
+    .iOS(.v17),
+    .visionOS(.v1),
   ],
   products: [
     .library(
@@ -18,10 +19,10 @@ let package = Package(
   dependencies: [
     .package(name: "AppAccount", path: "../AppAccount"),
     .package(name: "Models", path: "../Models"),
+    .package(name: "MediaUI", path: "../MediaUI"),
     .package(name: "Network", path: "../Network"),
     .package(name: "Env", path: "../Env"),
     .package(name: "DesignSystem", path: "../DesignSystem"),
-    .package(url: "https://github.com/Dimillian/TextView", branch: "main"),
   ],
   targets: [
     .target(
@@ -29,10 +30,13 @@ let package = Package(
       dependencies: [
         .product(name: "AppAccount", package: "AppAccount"),
         .product(name: "Models", package: "Models"),
+        .product(name: "MediaUI", package: "MediaUI"),
         .product(name: "Network", package: "Network"),
         .product(name: "Env", package: "Env"),
         .product(name: "DesignSystem", package: "DesignSystem"),
-        .product(name: "TextView", package: "TextView"),
+      ],
+      swiftSettings: [
+        .enableExperimentalFeature("StrictConcurrency"),
       ]
     ),
   ]

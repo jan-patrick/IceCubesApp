@@ -6,8 +6,8 @@ import SwiftUI
 public struct StatusEditHistoryView: View {
   @Environment(\.dismiss) private var dismiss
 
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var theme: Theme
+  @Environment(Client.self) private var client
+  @Environment(Theme.self) private var theme
 
   private let statusId: String
 
@@ -26,13 +26,15 @@ public struct StatusEditHistoryView: View {
               VStack(alignment: .leading, spacing: 8) {
                 EmojiTextApp(edit.content, emojis: edit.emojis)
                   .font(.scaledBody)
+                  .emojiSize(Font.scaledBodyFont.emojiSize)
+                  .emojiBaselineOffset(Font.scaledBodyFont.emojiBaselineOffset)
                 Group {
                   Text(edit.createdAt.asDate, style: .date) +
                     Text("status.summary.at-time") +
                     Text(edit.createdAt.asDate, style: .time)
                 }
                 .font(.footnote)
-                .foregroundColor(.gray)
+                .foregroundStyle(.secondary)
               }
             }
           } else {
@@ -49,7 +51,7 @@ public struct StatusEditHistoryView: View {
           Button("action.done", action: { dismiss() })
         }
       }
-      .navigationTitle("Edit History")
+      .navigationTitle("status.summary.edit-history")
       .navigationBarTitleDisplayMode(.inline)
       .task {
         do {

@@ -1,4 +1,6 @@
+import Combine
 import Models
+import Observation
 import SwiftUI
 
 public enum StatusesState {
@@ -12,8 +14,10 @@ public enum StatusesState {
 }
 
 @MainActor
-public protocol StatusesFetcher: ObservableObject {
+public protocol StatusesFetcher {
   var statusesState: StatusesState { get }
-  func fetchStatuses() async
+  func fetchNewestStatuses() async
   func fetchNextPage() async
+  func statusDidAppear(status: Status)
+  func statusDidDisappear(status: Status)
 }

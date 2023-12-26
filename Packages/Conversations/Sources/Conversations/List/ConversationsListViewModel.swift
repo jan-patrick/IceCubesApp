@@ -3,15 +3,17 @@ import Network
 import SwiftUI
 
 @MainActor
-class ConversationsListViewModel: ObservableObject {
+@Observable class ConversationsListViewModel {
   var client: Client?
 
-  @Published var isLoadingFirstPage: Bool = true
-  @Published var isLoadingNextPage: Bool = false
-  @Published var conversations: [Conversation] = []
-  @Published var isError: Bool = false
+  var isLoadingFirstPage: Bool = true
+  var isLoadingNextPage: Bool = false
+  var conversations: [Conversation] = []
+  var isError: Bool = false
 
   var nextPage: LinkHandler?
+
+  var scrollToTopVisible: Bool = false
 
   public init() {}
 
@@ -58,13 +60,48 @@ class ConversationsListViewModel: ObservableObject {
     await fetchConversations()
   }
 
+  func favorite(conversation: Conversation) async {
+    guard let client, let message = conversation.lastStatus else { return }
+    let endpoint: Endpoint = if message.favourited ?? false {
+      Statuses.unfavorite(id: message.id)
+    } else {
+      Statuses.favorite(id: message.id)
+    }
+    do {
+      let status: Status = try await client.post(endpoint: endpoint)
+      updateConversationWithNewLastStatus(conversation: conversation, newLastStatus: status)
+    } catch {}
+  }
+
+  func bookmark(conversation: Conversation) async {
+    guard let client, let message = conversation.lastStatus else { return }
+    let endpoint: Endpoint = if message.bookmarked ?? false {
+      Statuses.unbookmark(id: message.id)
+    } else {
+      Statuses.bookmark(id: message.id)
+    }
+    do {
+      let status: Status = try await client.post(endpoint: endpoint)
+      updateConversationWithNewLastStatus(conversation: conversation, newLastStatus: status)
+    } catch {}
+  }
+
+  private func updateConversationWithNewLastStatus(conversation: Conversation, newLastStatus: Status) {
+    let newConversation = Conversation(id: conversation.id, unread: conversation.unread, lastStatus: newLastStatus, accounts: conversation.accounts)
+    updateConversations(conversation: newConversation)
+  }
+
+  private func updateConversations(conversation: Conversation) {
+    if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+      conversations.remove(at: index)
+    }
+    conversations.insert(conversation, at: 0)
+    conversations = conversations.sorted(by: { ($0.lastStatus?.createdAt.asDate ?? Date.now) > ($1.lastStatus?.createdAt.asDate ?? Date.now) })
+  }
+
   func handleEvent(event: any StreamEvent) {
     if let event = event as? StreamEventConversation {
-      if let index = conversations.firstIndex(where: { $0.id == event.conversation.id }) {
-        conversations.remove(at: index)
-      }
-      conversations.insert(event.conversation, at: 0)
-      conversations = conversations.sorted(by: { $0.lastStatus.createdAt.asDate > $1.lastStatus.createdAt.asDate })
+      updateConversations(conversation: event.conversation)
     }
   }
 }

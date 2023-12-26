@@ -16,7 +16,7 @@ public extension AppAccount {
   func save() throws {
     let encoder = JSONEncoder()
     let data = try encoder.encode(self)
-    Self.keychain.set(data, forKey: key)
+    Self.keychain.set(data, forKey: key, withAccess: .accessibleAfterFirstUnlock)
   }
 
   func delete() {
@@ -24,7 +24,6 @@ public extension AppAccount {
   }
 
   static func retrieveAll() -> [AppAccount] {
-    migrateLegacyAccounts()
     let keychain = Self.keychain
     let decoder = JSONDecoder()
     let keys = keychain.allKeys
@@ -33,23 +32,11 @@ public extension AppAccount {
       if let data = keychain.getData(key) {
         if let account = try? decoder.decode(AppAccount.self, from: data) {
           accounts.append(account)
-        }
-      }
-    }
-    return accounts
-  }
-
-  static func migrateLegacyAccounts() {
-    let keychain = KeychainSwift()
-    let decoder = JSONDecoder()
-    let keys = keychain.allKeys
-    for key in keys {
-      if let data = keychain.getData(key) {
-        if let account = try? decoder.decode(AppAccount.self, from: data) {
           try? account.save()
         }
       }
     }
+    return accounts
   }
 
   static func deleteAll() {

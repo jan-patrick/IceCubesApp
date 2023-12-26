@@ -1,11 +1,12 @@
 import Env
 import Models
 import Network
+import Observation
 import Status
 import SwiftUI
 
 @MainActor
-class AccountDetailViewModel: ObservableObject, StatusesFetcher {
+@Observable class AccountDetailViewModel: StatusesFetcher {
   let accountId: String
   var client: Client?
   var isCurrentUser: Bool = false
@@ -27,13 +28,25 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
 
     var iconName: String {
       switch self {
-      case .statuses: return "bubble.right"
-      case .favorites: return "star"
-      case .bookmarks: return "bookmark"
-      case .followedTags: return "tag"
-      case .postsAndReplies: return "bubble.left.and.bubble.right"
-      case .media: return "photo.on.rectangle.angled"
-      case .lists: return "list.bullet"
+      case .statuses: "bubble.right"
+      case .favorites: "star"
+      case .bookmarks: "bookmark"
+      case .followedTags: "tag"
+      case .postsAndReplies: "bubble.left.and.bubble.right"
+      case .media: "photo.on.rectangle.angled"
+      case .lists: "list.bullet"
+      }
+    }
+
+    var accessibilityLabel: LocalizedStringKey {
+      switch self {
+      case .statuses: "accessibility.tabs.profile.picker.statuses"
+      case .favorites: "accessibility.tabs.profile.picker.favorites"
+      case .bookmarks: "accessibility.tabs.profile.picker.bookmarks"
+      case .followedTags: "accessibility.tabs.profile.picker.followed-tags"
+      case .postsAndReplies: "accessibility.tabs.profile.picker.posts-and-replies"
+      case .media: "accessibility.tabs.profile.picker.media"
+      case .lists: "accessibility.tabs.profile.picker.lists"
       }
     }
   }
@@ -44,8 +57,8 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
     case lists
   }
 
-  @Published var accountState: AccountState = .loading
-  @Published var tabState: TabState = .statuses(statusesState: .loading) {
+  var accountState: AccountState = .loading
+  var tabState: TabState = .statuses(statusesState: .loading) {
     didSet {
       /// Forward viewModel tabState related to statusesState to statusesState property
       /// for `StatusesFetcher` conformance as we wrap StatusesState in TabState
@@ -58,30 +71,35 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
     }
   }
 
-  @Published var statusesState: StatusesState = .loading
+  var statusesState: StatusesState = .loading
 
-  @Published var relationship: Relationship?
-  @Published var pinned: [Status] = []
-  @Published var favorites: [Status] = []
-  @Published var bookmarks: [Status] = []
+  var relationship: Relationship?
+  var pinned: [Status] = []
+  var favorites: [Status] = []
+  var bookmarks: [Status] = []
   private var favoritesNextPage: LinkHandler?
   private var bookmarksNextPage: LinkHandler?
-  @Published var featuredTags: [FeaturedTag] = []
-  @Published var fields: [Account.Field] = []
-  @Published var familiarFollowers: [Account] = []
-  @Published var selectedTab = Tab.statuses {
+  var featuredTags: [FeaturedTag] = []
+  var fields: [Account.Field] = []
+  var familiarFollowers: [Account] = []
+  var selectedTab = Tab.statuses {
     didSet {
       switch selectedTab {
       case .statuses, .postsAndReplies, .media:
         tabTask?.cancel()
         tabTask = Task {
-          await fetchStatuses()
+          await fetchNewestStatuses()
         }
       default:
         reloadTabState()
       }
     }
   }
+
+  var scrollToTopVisible: Bool = false
+
+  var translation: Translation?
+  var isLoadingTranslation = false
 
   private(set) var account: Account?
   private var tabTask: Task<Void, Never>?
@@ -130,11 +148,17 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
   private func fetchAccountData(accountId: String, client: Client) async throws -> AccountData {
     async let account: Account = client.get(endpoint: Accounts.accounts(id: accountId))
     async let featuredTags: [FeaturedTag] = client.get(endpoint: Accounts.featuredTags(id: accountId))
-    if client.isAuth && !isCurrentUser {
+    if client.isAuth, !isCurrentUser {
       async let relationships: [Relationship] = client.get(endpoint: Accounts.relationships(ids: [accountId]))
-      return try await .init(account: account,
-                             featuredTags: featuredTags,
-                             relationships: relationships)
+      do {
+        return try await .init(account: account,
+                               featuredTags: featuredTags,
+                               relationships: relationships)
+      } catch {
+        return try await .init(account: account,
+                               featuredTags: [],
+                               relationships: relationships)
+      }
     }
     return try await .init(account: account,
                            featuredTags: featuredTags,
@@ -146,7 +170,7 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
     self.familiarFollowers = familiarFollowers?.first?.accounts ?? []
   }
 
-  func fetchStatuses() async {
+  func fetchNewestStatuses() async {
     guard let client else { return }
     do {
       tabState = .statuses(statusesState: .loading)
@@ -157,6 +181,7 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
                                                          onlyMedia: selectedTab == .media ? true : nil,
                                                          excludeReplies: selectedTab == .statuses && !isCurrentUser ? true : nil,
                                                          pinned: nil))
+      StatusDataControllerProvider.shared.updateDataControllers(for: statuses, client: client)
       if selectedTab == .statuses {
         pinned =
           try await client.get(endpoint: Accounts.statuses(id: accountId,
@@ -165,10 +190,13 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
                                                            onlyMedia: nil,
                                                            excludeReplies: nil,
                                                            pinned: true))
+        StatusDataControllerProvider.shared.updateDataControllers(for: pinned, client: client)
       }
       if isCurrentUser {
         (favorites, favoritesNextPage) = try await client.getWithLink(endpoint: Accounts.favorites(sinceId: nil))
         (bookmarks, bookmarksNextPage) = try await client.getWithLink(endpoint: Accounts.bookmarks(sinceId: nil))
+        StatusDataControllerProvider.shared.updateDataControllers(for: favorites, client: client)
+        StatusDataControllerProvider.shared.updateDataControllers(for: bookmarks, client: client)
       }
       reloadTabState()
     } catch {
@@ -191,6 +219,7 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
                                                            excludeReplies: selectedTab == .statuses && !isCurrentUser ? true : nil,
                                                            pinned: nil))
         statuses.append(contentsOf: newStatuses)
+        StatusDataControllerProvider.shared.updateDataControllers(for: newStatuses, client: client)
         tabState = .statuses(statusesState: .display(statuses: statuses,
                                                      nextPageState: newStatuses.count < 20 ? .none : .hasNextPage))
       case .favorites:
@@ -198,11 +227,13 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
         let newFavorites: [Status]
         (newFavorites, favoritesNextPage) = try await client.getWithLink(endpoint: Accounts.favorites(sinceId: nextPageId))
         favorites.append(contentsOf: newFavorites)
+        StatusDataControllerProvider.shared.updateDataControllers(for: newFavorites, client: client)
         tabState = .statuses(statusesState: .display(statuses: favorites, nextPageState: .hasNextPage))
       case .bookmarks:
         guard let nextPageId = bookmarksNextPage?.maxId else { return }
         let newBookmarks: [Status]
         (newBookmarks, bookmarksNextPage) = try await client.getWithLink(endpoint: Accounts.bookmarks(sinceId: nextPageId))
+        StatusDataControllerProvider.shared.updateDataControllers(for: newBookmarks, client: client)
         bookmarks.append(contentsOf: newBookmarks)
         tabState = .statuses(statusesState: .display(statuses: bookmarks, nextPageState: .hasNextPage))
       case .followedTags, .lists:
@@ -244,6 +275,28 @@ class AccountDetailViewModel: ObservableObject, StatusesFetcher {
         statuses[originalIndex] = event.status
         statusesState = .display(statuses: statuses, nextPageState: .hasNextPage)
       }
+    }
+  }
+
+  func statusDidAppear(status _: Models.Status) {}
+
+  func statusDidDisappear(status _: Status) {}
+
+  func translate(userLang: String) async {
+    guard let account else { return }
+    withAnimation {
+      isLoadingTranslation = true
+    }
+
+    let userAPIKey = DeepLUserAPIHandler.readIfAllowed()
+    let userAPIFree = UserPreferences.shared.userDeeplAPIFree
+    let deeplClient = DeepLClient(userAPIKey: userAPIKey, userAPIFree: userAPIFree)
+
+    let translation = try? await deeplClient.request(target: userLang, text: account.note.asRawText)
+
+    withAnimation {
+      self.translation = translation
+      isLoadingTranslation = false
     }
   }
 }

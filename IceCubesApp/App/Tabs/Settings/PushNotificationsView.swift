@@ -7,12 +7,34 @@ import NukeUI
 import SwiftUI
 import UserNotifications
 
-struct PushNotificationsView: View {
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var appAccountsManager: AppAccountsManager
-  @EnvironmentObject private var pushNotifications: PushNotificationsService
+struct PushNotificationsViewWrapper: View {
+  @Environment(\.dismiss) private var dismiss
+  
+  public let subscription: PushNotificationSubscriptionSettings
+  
+  var body: some View {
+    NavigationStack {
+      PushNotificationsView(subscription: subscription)
+        .toolbar {
+          ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+              dismiss()
+            } label: {
+              Image(systemName: "xmark.circle")
+            }
+          }
+        }
+    }
+  }
+}
 
-  @StateObject public var subscription: PushNotificationSubscriptionSettings
+@MainActor
+struct PushNotificationsView: View {
+  @Environment(Theme.self) private var theme
+  @Environment(AppAccountsManager.self) private var appAccountsManager
+  @Environment(PushNotificationsService.self) private var pushNotifications
+
+  @State public var subscription: PushNotificationSubscriptionSettings
 
   var body: some View {
     Form {
@@ -32,7 +54,9 @@ struct PushNotificationsView: View {
       } footer: {
         Text("settings.push.main-toggle.description")
       }
+      #if !os(visionOS)
       .listRowBackground(theme.primaryBackgroundColor)
+      #endif
 
       if subscription.isEnabled {
         Section {
@@ -66,7 +90,7 @@ struct PushNotificationsView: View {
             subscription.isReblogNotificationEnabled = newValue
             updateSubscription()
           })) {
-            Label("settings.push.boosts", systemImage: "arrow.left.arrow.right.circle")
+            Label("settings.push.boosts", image: "Rocket")
           }
           Toggle(isOn: .init(get: {
             subscription.isPollNotificationEnabled
@@ -85,7 +109,9 @@ struct PushNotificationsView: View {
             Label("settings.push.new-posts", systemImage: "bubble.right")
           }
         }
+        #if !os(visionOS)
         .listRowBackground(theme.primaryBackgroundColor)
+        #endif
       }
 
       Section {
@@ -100,11 +126,15 @@ struct PushNotificationsView: View {
       } footer: {
         Text("settings.push.duplicate.footer")
       }
+      #if !os(visionOS)
       .listRowBackground(theme.primaryBackgroundColor)
+      #endif
     }
     .navigationTitle("settings.push.navigation-title")
+    #if !os(visionOS)
     .scrollContentBackground(.hidden)
     .background(theme.secondaryBackgroundColor)
+    #endif
     .task {
       await subscription.fetchSubscription()
     }

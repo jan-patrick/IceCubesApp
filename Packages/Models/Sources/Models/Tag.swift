@@ -1,7 +1,11 @@
 import Foundation
 
 public struct Tag: Codable, Identifiable, Equatable, Hashable {
-  public struct History: Codable {
+  public struct History: Codable, Identifiable {
+    public var id: String {
+      day
+    }
+
     public let day: String
     public let accounts: String
     public let uses: String
@@ -58,3 +62,7 @@ public struct FeaturedTag: Codable, Identifiable {
     }
   }
 }
+
+extension Tag: Sendable {}
+extension Tag.History: Sendable {}
+extension FeaturedTag: Sendable {}

@@ -4,12 +4,13 @@ import Models
 import Network
 import SwiftUI
 
+@MainActor
 struct EditFilterView: View {
   @Environment(\.dismiss) private var dismiss
 
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var account: CurrentAccount
-  @EnvironmentObject private var client: Client
+  @Environment(Theme.self) private var theme
+  @Environment(CurrentAccount.self) private var account
+  @Environment(Client.self) private var client
 
   @State private var isSavingFilter: Bool = false
   @State private var filter: ServerFilter?
@@ -18,14 +19,29 @@ struct EditFilterView: View {
   @State private var newKeyword: String = ""
   @State private var contexts: [ServerFilter.Context]
   @State private var filterAction: ServerFilter.Action
+  @State private var expiresAt: Date?
+  @State private var expirySelection: Duration
 
-  @FocusState private var isTitleFocused: Bool
+  enum Fields {
+    case title, newKeyword
+  }
+
+  @FocusState private var focusedField: Fields?
 
   private var data: ServerFilterData {
-    .init(title: title,
-          context: contexts,
-          filterAction: filterAction,
-          expireIn: nil)
+    let expiresIn: String? = switch expirySelection {
+    case .infinite:
+      "" // need to send an empty value in order for the server to clear this field in the filter
+    case .custom:
+      String(Int(expiresAt?.timeIntervalSince(Date()) ?? 0) + 50)
+    default:
+      String(expirySelection.rawValue + 50)
+    }
+
+    return ServerFilterData(title: title,
+                            context: contexts,
+                            filterAction: filterAction,
+                            expiresIn: expiresIn)
   }
 
   private var canSave: Bool {
@@ -38,12 +54,15 @@ struct EditFilterView: View {
     _keywords = .init(initialValue: filter?.keywords ?? [])
     _contexts = .init(initialValue: filter?.context ?? [.home])
     _filterAction = .init(initialValue: filter?.filterAction ?? .warn)
+    _expiresAt = .init(initialValue: filter?.expiresAt?.asDate)
+    _expirySelection = .init(initialValue: filter?.expiresAt == nil ? .infinite : .custom)
   }
 
   var body: some View {
     Form {
       titleSection
       if filter != nil {
+        expirySection
         keywordsSection
         contextsSection
         filterActionView
@@ -51,11 +70,14 @@ struct EditFilterView: View {
     }
     .navigationTitle(filter?.title ?? NSLocalizedString("filter.new", comment: ""))
     .navigationBarTitleDisplayMode(.inline)
+    #if !os(visionOS)
     .scrollContentBackground(.hidden)
+    .scrollDismissesKeyboard(.interactively)
     .background(theme.secondaryBackgroundColor)
+    #endif
     .onAppear {
       if filter == nil {
-        isTitleFocused = true
+        focusedField = .title
       }
     }
     .toolbar {
@@ -65,17 +87,67 @@ struct EditFilterView: View {
     }
   }
 
+  private var expirySection: some View {
+    Section("filter.edit.expiry") {
+      Picker(selection: $expirySelection, label: Text("filter.edit.expiry.duration")) {
+        ForEach(Duration.filterDurations(), id: \.rawValue) { duration in
+          Text(duration.description).tag(duration)
+        }
+      }
+      .onChange(of: expirySelection) { _, newValue in
+        if newValue != .custom {
+          expiresAt = Date(timeIntervalSinceNow: TimeInterval(newValue.rawValue))
+        }
+      }
+      if expirySelection != .infinite {
+        DatePicker("filter.edit.expiry.date-time",
+                   selection: Binding<Date>(get: { expiresAt ?? Date() }, set: { expiresAt = $0 }),
+                   displayedComponents: [.date, .hourAndMinute])
+          .disabled(expirySelection != .custom)
+      }
+    }
+    #if !os(visionOS)
+    .listRowBackground(theme.primaryBackgroundColor)
+    #endif
+  }
+
+  @ViewBuilder
   private var titleSection: some View {
     Section("filter.edit.title") {
       TextField("filter.edit.title", text: $title)
-        .focused($isTitleFocused)
+        .focused($focusedField, equals: .title)
         .onSubmit {
           Task {
             await saveFilter()
           }
         }
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
+
+    if filter == nil, !title.isEmpty {
+      Section {
+        Button {
+          Task {
+            await saveFilter()
+          }
+        } label: {
+          if isSavingFilter {
+            ProgressView()
+              .frame(maxWidth: .infinity)
+          } else {
+            Text("action.save")
+              .frame(maxWidth: .infinity)
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .transition(.opacity)
+      }
+      #if !os(visionOS)
+      .listRowBackground(theme.secondaryBackgroundColor)
+      #endif
+    }
   }
 
   private var keywordsSection: some View {
@@ -102,15 +174,35 @@ struct EditFilterView: View {
           }
         }
       }
-      TextField("filter.edit.keywords.add", text: $newKeyword, axis: .horizontal)
-        .onSubmit {
-          Task {
-            await addKeyword(name: newKeyword)
-            newKeyword = ""
+      HStack {
+        TextField("filter.edit.keywords.add", text: $newKeyword, axis: .horizontal)
+          .focused($focusedField, equals: .newKeyword)
+          .onSubmit {
+            Task {
+              await addKeyword(name: newKeyword)
+              newKeyword = ""
+              focusedField = .newKeyword
+            }
+          }
+        Spacer()
+        if !newKeyword.isEmpty {
+          Button {
+            Task {
+              Task {
+                await addKeyword(name: newKeyword)
+                newKeyword = ""
+              }
+            }
+          } label: {
+            Image(systemName: "checkmark.circle.fill")
+              .tint(.green)
           }
         }
+      }
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   private var contextsSection: some View {
@@ -132,7 +224,9 @@ struct EditFilterView: View {
         }
         .disabled(isSavingFilter)
       }
+      #if !os(visionOS)
       .listRowBackground(theme.primaryBackgroundColor)
+      #endif
     }
   }
 
@@ -146,14 +240,16 @@ struct EditFilterView: View {
       } label: {
         EmptyView()
       }
-      .onChange(of: filterAction) { _ in
+      .onChange(of: filterAction) {
         Task {
           await saveFilter()
         }
       }
       .pickerStyle(.inline)
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   private var saveButton: some View {
@@ -166,7 +262,7 @@ struct EditFilterView: View {
       if isSavingFilter {
         ProgressView()
       } else {
-        Text("action.done")
+        Text("action.save").bold()
       }
     }
     .disabled(!canSave)

@@ -17,39 +17,45 @@ public enum Statuses: Endpoint {
   case bookmark(id: String)
   case unbookmark(id: String)
   case history(id: String)
+  case translate(id: String, lang: String?)
+  case report(accountId: String, statusId: String, comment: String)
 
   public func path() -> String {
     switch self {
     case .postStatus:
-      return "statuses"
+      "statuses"
     case let .status(id):
-      return "statuses/\(id)"
+      "statuses/\(id)"
     case let .editStatus(id, _):
-      return "statuses/\(id)"
+      "statuses/\(id)"
     case let .context(id):
-      return "statuses/\(id)/context"
+      "statuses/\(id)/context"
     case let .favorite(id):
-      return "statuses/\(id)/favourite"
+      "statuses/\(id)/favourite"
     case let .unfavorite(id):
-      return "statuses/\(id)/unfavourite"
+      "statuses/\(id)/unfavourite"
     case let .reblog(id):
-      return "statuses/\(id)/reblog"
+      "statuses/\(id)/reblog"
     case let .unreblog(id):
-      return "statuses/\(id)/unreblog"
+      "statuses/\(id)/unreblog"
     case let .rebloggedBy(id, _):
-      return "statuses/\(id)/reblogged_by"
+      "statuses/\(id)/reblogged_by"
     case let .favoritedBy(id, _):
-      return "statuses/\(id)/favourited_by"
+      "statuses/\(id)/favourited_by"
     case let .pin(id):
-      return "statuses/\(id)/pin"
+      "statuses/\(id)/pin"
     case let .unpin(id):
-      return "statuses/\(id)/unpin"
+      "statuses/\(id)/unpin"
     case let .bookmark(id):
-      return "statuses/\(id)/bookmark"
+      "statuses/\(id)/bookmark"
     case let .unbookmark(id):
-      return "statuses/\(id)/unbookmark"
+      "statuses/\(id)/unbookmark"
     case let .history(id):
-      return "statuses/\(id)/history"
+      "statuses/\(id)/history"
+    case let .translate(id, _):
+      "statuses/\(id)/translate"
+    case .report:
+      "reports"
     }
   }
 
@@ -59,6 +65,15 @@ public enum Statuses: Endpoint {
       return makePaginationParam(sinceId: nil, maxId: maxId, mindId: nil)
     case let .favoritedBy(_, maxId):
       return makePaginationParam(sinceId: nil, maxId: maxId, mindId: nil)
+    case let .translate(_, lang):
+      if let lang {
+        return [.init(name: "lang", value: lang)]
+      }
+      return nil
+    case let .report(accountId, statusId, comment):
+      return [.init(name: "account_id", value: accountId),
+              .init(name: "status_ids[]", value: statusId),
+              .init(name: "comment", value: comment)]
     default:
       return nil
     }
@@ -67,16 +82,16 @@ public enum Statuses: Endpoint {
   public var jsonValue: Encodable? {
     switch self {
     case let .postStatus(json):
-      return json
+      json
     case let .editStatus(_, json):
-      return json
+      json
     default:
-      return nil
+      nil
     }
   }
 }
 
-public struct StatusData: Encodable {
+public struct StatusData: Encodable, Sendable {
   public let status: String
   public let visibility: Visibility
   public let inReplyToId: String?
@@ -84,8 +99,9 @@ public struct StatusData: Encodable {
   public let mediaIds: [String]?
   public let poll: PollData?
   public let language: String?
+  public let mediaAttributes: [MediaAttribute]?
 
-  public struct PollData: Encodable {
+  public struct PollData: Encodable, Sendable {
     public let options: [String]
     public let multiple: Bool
     public let expires_in: Int
@@ -97,13 +113,28 @@ public struct StatusData: Encodable {
     }
   }
 
+  public struct MediaAttribute: Encodable, Sendable {
+    public let id: String
+    public let description: String?
+    public let thumbnail: String?
+    public let focus: String?
+
+    public init(id: String, description: String?, thumbnail: String?, focus: String?) {
+      self.id = id
+      self.description = description
+      self.thumbnail = thumbnail
+      self.focus = focus
+    }
+  }
+
   public init(status: String,
               visibility: Visibility,
               inReplyToId: String? = nil,
               spoilerText: String? = nil,
               mediaIds: [String]? = nil,
               poll: PollData? = nil,
-              language: String? = nil)
+              language: String? = nil,
+              mediaAttributes: [MediaAttribute]? = nil)
   {
     self.status = status
     self.visibility = visibility
@@ -112,5 +143,6 @@ public struct StatusData: Encodable {
     self.mediaIds = mediaIds
     self.poll = poll
     self.language = language
+    self.mediaAttributes = mediaAttributes
   }
 }

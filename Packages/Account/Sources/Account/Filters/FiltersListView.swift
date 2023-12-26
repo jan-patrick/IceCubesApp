@@ -4,12 +4,13 @@ import Models
 import Network
 import SwiftUI
 
+@MainActor
 public struct FiltersListView: View {
   @Environment(\.dismiss) private var dismiss
 
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var account: CurrentAccount
-  @EnvironmentObject private var client: Client
+  @Environment(Theme.self) private var theme
+  @Environment(CurrentAccount.self) private var account
+  @Environment(Client.self) private var client
 
   @State private var isLoading: Bool = true
   @State private var filters: [ServerFilter] = []
@@ -19,11 +20,11 @@ public struct FiltersListView: View {
   public var body: some View {
     NavigationStack {
       Form {
-        if !isLoading && filters.isEmpty {
+        if !isLoading, filters.isEmpty {
           EmptyView()
         } else {
           Section {
-            if isLoading && filters.isEmpty {
+            if isLoading, filters.isEmpty {
               ProgressView()
             } else {
               ForEach(filters) { filter in
@@ -31,9 +32,20 @@ public struct FiltersListView: View {
                   VStack(alignment: .leading) {
                     Text(filter.title)
                       .font(.scaledSubheadline)
-                    Text("\(filter.context.map { $0.name }.joined(separator: ", "))")
+                    Text("\(filter.context.map(\.name).joined(separator: ", "))")
                       .font(.scaledBody)
-                      .foregroundColor(.gray)
+                      .foregroundStyle(.secondary)
+                    if filter.hasExpiry() {
+                      if filter.isExpired() {
+                        Text("filter.expired")
+                          .font(.footnote)
+                          .foregroundStyle(.secondary)
+                      } else {
+                        Text("filter.expiry-\(filter.expiresAt!.relativeFormatted)")
+                          .font(.footnote)
+                          .foregroundStyle(.secondary)
+                      }
+                    }
                   }
                 }
               }
@@ -42,7 +54,9 @@ public struct FiltersListView: View {
               }
             }
           }
+          #if !os(visionOS)
           .listRowBackground(theme.primaryBackgroundColor)
+          #endif
         }
 
         Section {
@@ -50,15 +64,19 @@ public struct FiltersListView: View {
             Label("filter.new", systemImage: "plus")
           }
         }
+        #if !os(visionOS)
         .listRowBackground(theme.primaryBackgroundColor)
+        #endif
       }
       .toolbar {
         toolbarContent
       }
       .navigationTitle("filter.filters")
       .navigationBarTitleDisplayMode(.inline)
+      #if !os(visionOS)
       .scrollContentBackground(.hidden)
       .background(theme.secondaryBackgroundColor)
+      #endif
       .task {
         do {
           isLoading = true
@@ -88,8 +106,10 @@ public struct FiltersListView: View {
   @ToolbarContentBuilder
   private var toolbarContent: some ToolbarContent {
     ToolbarItem(placement: .navigationBarTrailing) {
-      Button("action.done") {
+      Button {
         dismiss()
+      } label: {
+        Text("action.done").bold()
       }
     }
   }

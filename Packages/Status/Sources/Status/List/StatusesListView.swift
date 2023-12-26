@@ -1,66 +1,79 @@
 import DesignSystem
+import Env
 import Models
+import Network
 import Shimmer
 import SwiftUI
 
+@MainActor
 public struct StatusesListView<Fetcher>: View where Fetcher: StatusesFetcher {
-  @ObservedObject private var fetcher: Fetcher
-  private let isRemote: Bool
+  @Environment(Theme.self) private var theme
 
-  public init(fetcher: Fetcher, isRemote: Bool = false) {
-    self.fetcher = fetcher
+  @State private var fetcher: Fetcher
+  // Whether this status is on a remote local timeline (many actions are unavailable if so)
+  private let isRemote: Bool
+  private let routerPath: RouterPath
+  private let client: Client
+
+  public init(fetcher: Fetcher,
+              client: Client,
+              routerPath: RouterPath,
+              isRemote: Bool = false)
+  {
+    _fetcher = .init(initialValue: fetcher)
     self.isRemote = isRemote
+    self.client = client
+    self.routerPath = routerPath
   }
 
   public var body: some View {
-    Group {
-      switch fetcher.statusesState {
-      case .loading:
-        ForEach(Status.placeholders()) { status in
-          StatusRowView(viewModel: .init(status: status, isCompact: false))
-            .redacted(reason: .placeholder)
-            .shimmering()
-            .padding(.horizontal, .layoutPadding)
-          Divider()
-            .padding(.vertical, .dividerPadding)
-        }
-      case .error:
-        ErrorView(title: "status.error.title",
-                  message: "status.error.loading.message",
-                  buttonTitle: "action.retry") {
-          Task {
-            await fetcher.fetchStatuses()
-          }
-        }
-
-      case let .display(statuses, nextPageState):
-        ForEach(statuses, id: \.viewId) { status in
-          let viewModel = StatusRowViewModel(status: status, isCompact: false, isRemote: isRemote)
-          if viewModel.filter?.filter.filterAction != .hide {
-            StatusRowView(viewModel: viewModel)
-              .id(status.id)
-              .padding(.horizontal, .layoutPadding)
-            Divider()
-              .padding(.vertical, .dividerPadding)
-          }
-        }
-
-        switch nextPageState {
-        case .hasNextPage:
-          loadingRow
-            .onAppear {
-              Task {
-                await fetcher.fetchNextPage()
-              }
-            }
-        case .loadingNextPage:
-          loadingRow
-        case .none:
-          EmptyView()
+    switch fetcher.statusesState {
+    case .loading:
+      ForEach(Status.placeholders()) { status in
+        StatusRowView(viewModel: .init(status: status, client: client, routerPath: routerPath))
+          .redacted(reason: .placeholder)
+          .allowsHitTesting(false)
+      }
+    case .error:
+      ErrorView(title: "status.error.title",
+                message: "status.error.loading.message",
+                buttonTitle: "action.retry")
+      {
+        Task {
+          await fetcher.fetchNewestStatuses()
         }
       }
+      .listRowBackground(theme.primaryBackgroundColor)
+      .listRowSeparator(.hidden)
+
+    case let .display(statuses, nextPageState):
+      ForEach(statuses, id: \.viewId) { status in
+        StatusRowView(viewModel: StatusRowViewModel(status: status,
+                                                    client: client,
+                                                    routerPath: routerPath,
+                                                    isRemote: isRemote))
+          .id(status.id)
+          .onAppear {
+            fetcher.statusDidAppear(status: status)
+          }
+          .onDisappear {
+            fetcher.statusDidDisappear(status: status)
+          }
+      }
+      switch nextPageState {
+      case .hasNextPage:
+        loadingRow
+          .onAppear {
+            Task {
+              await fetcher.fetchNextPage()
+            }
+          }
+      case .loadingNextPage:
+        loadingRow
+      case .none:
+        EmptyView()
+      }
     }
-    .frame(maxWidth: .maxColumnWidth)
   }
 
   private var loadingRow: some View {
@@ -70,5 +83,6 @@ public struct StatusesListView<Fetcher>: View where Fetcher: StatusesFetcher {
       Spacer()
     }
     .padding(.horizontal, .layoutPadding)
+    .listRowBackground(theme.primaryBackgroundColor)
   }
 }

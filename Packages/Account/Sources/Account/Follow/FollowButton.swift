@@ -1,17 +1,19 @@
+import Combine
 import Foundation
 import Models
 import Network
+import Observation
 import SwiftUI
 
 @MainActor
-public class FollowButtonViewModel: ObservableObject {
+@Observable public class FollowButtonViewModel {
   var client: Client?
 
   public let accountId: String
   public let shouldDisplayNotify: Bool
   public let relationshipUpdated: (Relationship) -> Void
-  @Published public private(set) var relationship: Relationship
-  @Published public private(set) var isUpdating: Bool = false
+  public private(set) var relationship: Relationship
+  public private(set) var isUpdating: Bool = false
 
   public init(accountId: String,
               relationship: Relationship,
@@ -74,11 +76,11 @@ public class FollowButtonViewModel: ObservableObject {
 }
 
 public struct FollowButton: View {
-  @EnvironmentObject private var client: Client
-  @StateObject private var viewModel: FollowButtonViewModel
+  @Environment(Client.self) private var client
+  @State private var viewModel: FollowButtonViewModel
 
   public init(viewModel: FollowButtonViewModel) {
-    _viewModel = StateObject(wrappedValue: viewModel)
+    _viewModel = .init(initialValue: viewModel)
   }
 
   public var body: some View {
@@ -96,6 +98,8 @@ public struct FollowButton: View {
           Text("account.follow.requested")
         } else {
           Text(viewModel.relationship.following ? "account.follow.following" : "account.follow.follow")
+            .accessibilityLabel("account.follow.following")
+            .accessibilityValue(viewModel.relationship.following ? "accessibility.general.toggle.on" : "accessibility.general.toggle.off")
         }
       }
       if viewModel.relationship.following,
@@ -109,13 +113,17 @@ public struct FollowButton: View {
           } label: {
             Image(systemName: viewModel.relationship.notifying ? "bell.fill" : "bell")
           }
+          .accessibilityLabel("accessibility.tabs.profile.user-notifications.label")
+          .accessibilityValue(viewModel.relationship.notifying ? "accessibility.general.toggle.on" : "accessibility.general.toggle.off")
           Button {
             Task {
               await viewModel.toggleReboosts()
             }
           } label: {
-            Image(systemName: viewModel.relationship.showingReblogs ? "arrow.left.arrow.right.circle.fill" : "arrow.left.arrow.right.circle")
+            Image(viewModel.relationship.showingReblogs ? "Rocket.Fill" : "Rocket")
           }
+          .accessibilityLabel("accessibility.tabs.profile.user-reblogs.label")
+          .accessibilityValue(viewModel.relationship.showingReblogs ? "accessibility.general.toggle.on" : "accessibility.general.toggle.off")
         }
       }
     }

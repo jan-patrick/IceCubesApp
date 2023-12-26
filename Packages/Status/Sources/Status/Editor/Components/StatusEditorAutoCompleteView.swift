@@ -3,9 +3,10 @@ import EmojiText
 import Foundation
 import SwiftUI
 
+@MainActor
 struct StatusEditorAutoCompleteView: View {
-  @EnvironmentObject private var theme: Theme
-  @ObservedObject var viewModel: StatusEditorViewModel
+  @Environment(Theme.self) private var theme
+  var viewModel: StatusEditorViewModel
 
   var body: some View {
     if !viewModel.mentionsSuggestions.isEmpty || !viewModel.tagsSuggestions.isEmpty {
@@ -30,10 +31,12 @@ struct StatusEditorAutoCompleteView: View {
         viewModel.selectMentionSuggestion(account: account)
       } label: {
         HStack {
-          AvatarView(url: account.avatar, size: .badge)
+          AvatarView(account.avatar, config: AvatarView.FrameConfig.badge)
           VStack(alignment: .leading) {
             EmojiTextApp(.init(stringValue: account.safeDisplayName),
                          emojis: account.emojis)
+              .emojiSize(Font.scaledFootnoteFont.emojiSize)
+              .emojiBaselineOffset(Font.scaledFootnoteFont.emojiBaselineOffset)
               .font(.scaledFootnote)
               .foregroundColor(theme.labelColor)
             Text("@\(account.acct)")
@@ -50,9 +53,14 @@ struct StatusEditorAutoCompleteView: View {
       Button {
         viewModel.selectHashtagSuggestion(tag: tag)
       } label: {
-        Text("#\(tag.name)")
-          .font(.scaledCaption)
-          .foregroundColor(theme.tintColor)
+        VStack(alignment: .leading) {
+          Text("#\(tag.name)")
+            .font(.scaledFootnote)
+            .foregroundColor(theme.tintColor)
+          Text("tag.suggested.mentions-\(tag.totalUses)")
+            .font(.scaledCaption)
+            .foregroundStyle(.secondary)
+        }
       }
     }
   }

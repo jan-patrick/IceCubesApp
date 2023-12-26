@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Emoji: Codable, Hashable, Identifiable, Equatable {
+public struct Emoji: Codable, Hashable, Identifiable, Equatable, Sendable {
   public func hash(into hasher: inout Hasher) {
     hasher.combine(shortcode)
   }
@@ -13,4 +13,5 @@ public struct Emoji: Codable, Hashable, Identifiable, Equatable {
   public let url: URL
   public let staticUrl: URL
   public let visibleInPicker: Bool
+  public let category: String?
 }

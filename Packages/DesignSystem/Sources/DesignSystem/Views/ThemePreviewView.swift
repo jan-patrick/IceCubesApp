@@ -3,7 +3,7 @@ import SwiftUI
 
 public struct ThemePreviewView: View {
   private let gutterSpace: Double = 8
-  @EnvironmentObject private var theme: Theme
+  @Environment(Theme.self) private var theme
   @Environment(\.dismiss) var dismiss
 
   public init() {}
@@ -25,7 +25,7 @@ public struct ThemePreviewView: View {
 }
 
 struct ThemeBoxView: View {
-  @EnvironmentObject var theme: Theme
+  @Environment(Theme.self) private var theme
   private let gutterSpace = 8.0
   @State private var isSelected = false
 
@@ -38,6 +38,7 @@ struct ThemeBoxView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .cornerRadius(4)
         .shadow(radius: 2, x: 2, y: 4)
+        .accessibilityHidden(true)
 
       VStack(spacing: gutterSpace) {
         Text(color.name.rawValue)
@@ -47,7 +48,7 @@ struct ThemeBoxView: View {
 
         Text("design.theme.toots-preview")
           .foregroundColor(color.labelColor)
-          .frame(maxWidth: .infinity)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
           .padding()
           .background(color.primaryBackgroundColor)
 
@@ -80,7 +81,7 @@ struct ThemeBoxView: View {
     .onAppear {
       isSelected = theme.selectedSet.rawValue == color.name.rawValue
     }
-    .onChange(of: theme.selectedSet) { newValue in
+    .onChange(of: theme.selectedSet) { _, newValue in
       isSelected = newValue.rawValue == color.name.rawValue
     }
     .onTapGesture {
@@ -88,7 +89,7 @@ struct ThemeBoxView: View {
       if color.scheme != currentScheme {
         theme.followSystemColorScheme = false
       }
-      theme.selectedSet = color.name
+      theme.applySet(set: color.name)
     }
   }
 }

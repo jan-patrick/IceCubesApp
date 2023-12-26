@@ -4,7 +4,7 @@ import NukeUI
 import SwiftUI
 
 struct InstanceInfoView: View {
-  @EnvironmentObject private var theme: Theme
+  @Environment(Theme.self) private var theme
 
   let instance: Instance
 
@@ -13,13 +13,15 @@ struct InstanceInfoView: View {
       InstanceInfoSection(instance: instance)
     }
     .navigationTitle("instance.info.navigation-title")
+    #if !os(visionOS)
     .scrollContentBackground(.hidden)
     .background(theme.secondaryBackgroundColor)
+    #endif
   }
 }
 
 public struct InstanceInfoSection: View {
-  @EnvironmentObject private var theme: Theme
+  @Environment(Theme.self) private var theme
 
   let instance: Instance
 
@@ -28,20 +30,32 @@ public struct InstanceInfoSection: View {
       LabeledContent("instance.info.name", value: instance.title)
       Text(instance.shortDescription)
       LabeledContent("instance.info.email", value: instance.email)
-      LabeledContent("instance.info.version", value: instance.version)
-      LabeledContent("instance.info.users", value: "\(instance.stats.userCount)")
-      LabeledContent("instance.info.posts", value: "\(instance.stats.statusCount)")
-      LabeledContent("instance.info.domains", value: "\(instance.stats.domainCount)")
+      LabeledContent("instance.info.version") {
+        Text(instance.version).monospaced()
+      }
+      LabeledContent("instance.info.users", value: format(instance.stats.userCount))
+      LabeledContent("instance.info.posts", value: format(instance.stats.statusCount))
+      LabeledContent("instance.info.domains", value: format(instance.stats.domainCount))
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
 
     if let rules = instance.rules {
       Section("instance.info.section.rules") {
         ForEach(rules) { rule in
-          Text(rule.text)
+          Text(rule.text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
       }
+      #if !os(visionOS)
       .listRowBackground(theme.primaryBackgroundColor)
+      #endif
     }
+  }
+
+  private func format(_ int: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .decimal
+    return formatter.string(from: NSNumber(value: int))!
   }
 }

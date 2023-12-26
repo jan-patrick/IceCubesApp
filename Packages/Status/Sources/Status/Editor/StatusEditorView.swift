@@ -1,4 +1,3 @@
-import Accounts
 import AppAccount
 import DesignSystem
 import EmojiText
@@ -7,245 +6,137 @@ import Models
 import Network
 import NukeUI
 import PhotosUI
+import StoreKit
 import SwiftUI
-import TextView
 import UIKit
 
+@MainActor
 public struct StatusEditorView: View {
-  @EnvironmentObject private var preferences: UserPreferences
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var currentAccount: CurrentAccount
-  @Environment(\.dismiss) private var dismiss
+  @Environment(AppAccountsManager.self) private var appAccounts
+  @Environment(CurrentAccount.self) private var currentAccount
+  @Environment(Theme.self) private var theme
 
-  @StateObject private var viewModel: StatusEditorViewModel
-  @FocusState private var isSpoilerTextFocused: Bool
+  @State private var mainSEVM: StatusEditorViewModel
+  @State private var followUpSEVMs: [StatusEditorViewModel] = []
+  @FocusState private var isSpoilerTextFocused: UUID? // connect CoreEditor and StatusEditorAccessoryView
+  @State private var editingMediaContainer: StatusEditorMediaContainer?
+  @State private var scrollID: UUID?
 
-  @State private var isDismissAlertPresented: Bool = false
-  @State private var isLoadingAIRequest: Bool = false
+  @FocusState private var editorFocusState: StatusEditorFocusState?
+
+  private var focusedSEVM: StatusEditorViewModel {
+    if case let .followUp(id) = editorFocusState,
+       let sevm = followUpSEVMs.first(where: { $0.id == id })
+    { return sevm }
+
+    return mainSEVM
+  }
 
   public init(mode: StatusEditorViewModel.Mode) {
-    _viewModel = StateObject(wrappedValue: .init(mode: mode))
+    _mainSEVM = State(initialValue: StatusEditorViewModel(mode: mode))
   }
 
   public var body: some View {
+    @Bindable var focusedSEVM = focusedSEVM
+
     NavigationStack {
-      ZStack(alignment: .bottom) {
-        ScrollView {
-          Divider()
-          spoilerTextView
-          VStack(spacing: 12) {
-            accountHeaderView
-              .padding(.horizontal, .layoutPadding)
-            TextView($viewModel.statusText, $viewModel.selectedRange, $viewModel.markedTextRange)
-              .placeholder(String(localized: "status.editor.text.placeholder"))
-              .font(Font.scaledBodyUIFont)
-              .setKeyboardType(preferences.isSocialKeyboardEnabled ? .twitter : .default)
-              .padding(.horizontal, .layoutPadding)
-            StatusEditorMediaView(viewModel: viewModel)
-            if let status = viewModel.embeddedStatus {
-              StatusEmbeddedView(status: status)
-                .padding(.horizontal, .layoutPadding)
-                .disabled(true)
-            } else if let status = viewModel.replyToStatus {
-              Divider()
-                .padding(.top, 20)
-              StatusEmbeddedView(status: status)
-                .padding(.horizontal, .layoutPadding)
-                .disabled(true)
-            }
-            if viewModel.showPoll {
-              StatusEditorPollView(viewModel: viewModel, showPoll: $viewModel.showPoll)
-                .padding(.horizontal)
-            }
-            Spacer()
-          }
-          .padding(.top, 8)
-          .padding(.bottom, 40)
-        }
-        VStack(alignment: .leading, spacing: 0) {
-          StatusEditorAutoCompleteView(viewModel: viewModel)
-          StatusEditorAccessoryView(isSpoilerTextFocused: $isSpoilerTextFocused,
-                                    viewModel: viewModel)
-        }
-      }
-      .onDrop(of: StatusEditorUTTypeSupported.types(), delegate: viewModel)
-      .onAppear {
-        viewModel.client = client
-        viewModel.currentAccount = currentAccount.account
-        viewModel.theme = theme
-        viewModel.preferences = preferences
-        viewModel.prepareStatusText()
-        if !client.isAuth {
-          dismiss()
-          NotificationCenter.default.post(name: NotificationsName.shareSheetClose,
-                                          object: nil)
-        }
+      ScrollView {
+        VStackLayout(spacing: 0) {
+          StatusEditorCoreView(
+            viewModel: mainSEVM,
+            followUpSEVMs: $followUpSEVMs,
+            editingMediaContainer: $editingMediaContainer,
+            isSpoilerTextFocused: $isSpoilerTextFocused,
+            editorFocusState: $editorFocusState,
+            assignedFocusState: .main,
+            isMain: true
+          )
+          .id(mainSEVM.id)
 
-        Task {
-          await viewModel.fetchCustomEmojis()
+          ForEach(followUpSEVMs) { sevm in
+            @Bindable var sevm: StatusEditorViewModel = sevm
+
+            StatusEditorCoreView(
+              viewModel: sevm,
+              followUpSEVMs: $followUpSEVMs,
+              editingMediaContainer: $editingMediaContainer,
+              isSpoilerTextFocused: $isSpoilerTextFocused,
+              editorFocusState: $editorFocusState,
+              assignedFocusState: .followUp(index: sevm.id),
+              isMain: false
+            )
+            .id(sevm.id)
+          }
         }
+        .scrollTargetLayout()
       }
-      .onChange(of: currentAccount.account?.id, perform: { _ in
-        viewModel.client = client
-        viewModel.currentAccount = currentAccount.account
-      })
+      .scrollPosition(id: $scrollID, anchor: .top)
+      .animation(.bouncy(duration: 0.3), value: editorFocusState)
+      .animation(.bouncy(duration: 0.3), value: followUpSEVMs)
+      #if !os(visionOS)
       .background(theme.primaryBackgroundColor)
-      .navigationTitle(viewModel.mode.title)
+      #endif
+      .safeAreaInset(edge: .bottom) {
+        StatusEditorAutoCompleteView(viewModel: focusedSEVM)
+      }
+      #if os(visionOS)
+      .ornament(attachmentAnchor: .scene(.bottom)) {
+        StatusEditorAccessoryView(isSpoilerTextFocused: $isSpoilerTextFocused, focusedSEVM: focusedSEVM, followUpSEVMs: $followUpSEVMs)
+          }
+      #else
+      .safeAreaInset(edge: .bottom) {
+        StatusEditorAccessoryView(isSpoilerTextFocused: $isSpoilerTextFocused, focusedSEVM: focusedSEVM, followUpSEVMs: $followUpSEVMs)
+      }
+      #endif
+      .accessibilitySortPriority(1) // Ensure that all elements inside the `ScrollView` occur earlier than the accessory views
+      .navigationTitle(focusedSEVM.mode.title)
       .navigationBarTitleDisplayMode(.inline)
-      .alert("Error while posting",
-             isPresented: $viewModel.showPostingErrorAlert,
-             actions: {
-               Button("Ok") {}
-             }, message: {
-               Text(viewModel.postingError ?? "")
-             })
-      .toolbar {
-        if preferences.isOpenAIEnabled {
-          ToolbarItem(placement: .navigationBarTrailing) {
-            AIMenu
-              .disabled(!viewModel.canPost)
-          }
+      .toolbar { StatusEditorToolbarItems(mainSEVM: mainSEVM, followUpSEVMs: followUpSEVMs) }
+      .toolbarBackground(.visible, for: .navigationBar)
+      .alert(
+        "status.error.posting.title",
+        isPresented: $focusedSEVM.showPostingErrorAlert,
+        actions: {
+          Button("OK") {}
+        }, message: {
+          Text(mainSEVM.postingError ?? "")
         }
-        ToolbarItem(placement: .navigationBarTrailing) {
-          Button {
-            Task {
-              let status = await viewModel.postStatus()
-              if status != nil {
-                dismiss()
-                NotificationCenter.default.post(name: NotificationsName.shareSheetClose,
-                                                object: nil)
-              }
-            }
-          } label: {
-            if viewModel.isPosting {
-              ProgressView()
-            } else {
-              Text("status.action.post")
-            }
-          }
-          .disabled(!viewModel.canPost)
-          .keyboardShortcut(.return, modifiers: .command)
-        }
-        ToolbarItem(placement: .navigationBarLeading) {
-          Button {
-            if viewModel.shouldDisplayDismissWarning {
-              isDismissAlertPresented = true
-            } else {
-              dismiss()
-              NotificationCenter.default.post(name: NotificationsName.shareSheetClose,
-                                              object: nil)
-            }
-          } label: {
-            Text("action.cancel")
-          }
-          .keyboardShortcut(.cancelAction)
-          .confirmationDialog("",
-                              isPresented: $isDismissAlertPresented,
-                              actions: {
-                                Button("status.draft.delete", role: .destructive) {
-                                  dismiss()
-                                  NotificationCenter.default.post(name: NotificationsName.shareSheetClose,
-                                                                  object: nil)
-                                }
-                                Button("status.draft.save") {
-                                  preferences.draftsPosts.insert(viewModel.statusText.string, at: 0)
-                                  dismiss()
-                                  NotificationCenter.default.post(name: NotificationsName.shareSheetClose,
-                                                                  object: nil)
-                                }
-                                Button("action.cancel", role: .cancel) {}
-                              })
-        }
-      }
-    }
-    .interactiveDismissDisabled(!viewModel.statusText.string.isEmpty)
-  }
-
-  @ViewBuilder
-  private var spoilerTextView: some View {
-    if viewModel.spoilerOn {
-      VStack {
-        TextField("status.editor.spoiler", text: $viewModel.spoilerText)
-          .focused($isSpoilerTextFocused)
-          .padding(.horizontal, .layoutPadding)
-      }
-      .frame(height: 35)
-      .background(theme.tintColor.opacity(0.20))
-      .offset(y: -8)
-    }
-  }
-
-  @ViewBuilder
-  private var accountHeaderView: some View {
-    if let account = currentAccount.account {
-      HStack {
-        AppAccountsSelectorView(routerPath: RouterPath(),
-                                accountCreationEnabled: false,
-                                avatarSize: .status)
-        VStack(alignment: .leading, spacing: 4) {
-          privacyMenu
-          Text("@\(account.acct)")
-            .font(.scaledFootnote)
-            .foregroundColor(.gray)
-        }
-        Spacer()
-      }
-    }
-  }
-
-  private var privacyMenu: some View {
-    Menu {
-      Section("status.editor.visibility") {
-        ForEach(Models.Visibility.allCases, id: \.self) { visibility in
-          Button {
-            viewModel.visibility = visibility
-          } label: {
-            Label(visibility.title, systemImage: visibility.iconName)
-          }
-        }
-      }
-    } label: {
-      HStack {
-        Label(viewModel.visibility.title, systemImage: viewModel.visibility.iconName)
-        Image(systemName: "chevron.down")
-      }
-      .font(.scaledFootnote)
-      .padding(4)
-      .overlay(
-        RoundedRectangle(cornerRadius: 8)
-          .stroke(theme.tintColor, lineWidth: 1)
       )
-    }
-  }
-
-  private var AIMenu: some View {
-    Menu {
-      ForEach(StatusEditorAIPrompts.allCases, id: \.self) { prompt in
-        Button {
-          Task {
-            isLoadingAIRequest = true
-            await viewModel.runOpenAI(prompt: prompt.toRequestPrompt(text: viewModel.statusText.string))
-            isLoadingAIRequest = false
+      .interactiveDismissDisabled(mainSEVM.shouldDisplayDismissWarning)
+      .onChange(of: appAccounts.currentClient) { _, newValue in
+        if mainSEVM.mode.isInShareExtension {
+          currentAccount.setClient(client: newValue)
+          mainSEVM.client = newValue
+          for post in followUpSEVMs {
+            post.client = newValue
           }
-        } label: {
-          prompt.label
         }
       }
-      if let backup = viewModel.backupStatusText {
-        Button {
-          viewModel.replaceTextWith(text: backup.string)
-          viewModel.backupStatusText = nil
-        } label: {
-          Label("status.editor.restore-previous", systemImage: "arrow.uturn.right")
+      .onDrop(of: StatusEditorUTTypeSupported.types(), delegate: focusedSEVM)
+      .onChange(of: currentAccount.account?.id) {
+        mainSEVM.currentAccount = currentAccount.account
+        for p in followUpSEVMs {
+          p.currentAccount = mainSEVM.currentAccount
         }
       }
-    } label: {
-      if isLoadingAIRequest {
-        ProgressView()
-      } else {
-        Image(systemName: "faxmachine")
+      .onChange(of: mainSEVM.visibility) {
+        for p in followUpSEVMs {
+          p.visibility = mainSEVM.visibility
+        }
       }
+      .onChange(of: followUpSEVMs.count) { oldValue, newValue in
+        if oldValue < newValue {
+          Task {
+            try? await Task.sleep(for: .seconds(0.1))
+            withAnimation(.bouncy(duration: 0.5)) {
+              scrollID = followUpSEVMs.last?.id
+            }
+          }
+        }
+      }
+    }
+    .sheet(item: $editingMediaContainer) { container in
+      StatusEditorMediaEditView(viewModel: focusedSEVM, container: container)
     }
   }
 }

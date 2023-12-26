@@ -5,104 +5,192 @@ import Network
 import Shimmer
 import SwiftUI
 
+@MainActor
 public struct StatusDetailView: View {
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var currentAccount: CurrentAccount
-  @EnvironmentObject private var watcher: StreamWatcher
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var routerPath: RouterPath
-  @Environment(\.openURL) private var openURL
-  @StateObject private var viewModel: StatusDetailViewModel
+  @Environment(Theme.self) private var theme
+  @Environment(CurrentAccount.self) private var currentAccount
+  @Environment(StreamWatcher.self) private var watcher
+  @Environment(Client.self) private var client
+  @Environment(RouterPath.self) private var routerPath
+  @Environment(\.isCompact) private var isCompact: Bool
+  @Environment(UserPreferences.self) private var userPreferences: UserPreferences
+
+  @State private var viewModel: StatusDetailViewModel
+
   @State private var isLoaded: Bool = false
-  
+  @State private var statusHeight: CGFloat = 0
+
+  /// April 4th, 2023: Without explicit focus being set, VoiceOver will skip over a seemingly random number of elements on this screen when pushing in from the main timeline.
+  /// By using ``@AccessibilityFocusState`` and setting focus once, we work around this issue.
+  @AccessibilityFocusState private var initialFocusBugWorkaround: Bool
+
   public init(statusId: String) {
-    _viewModel = StateObject(wrappedValue: .init(statusId: statusId))
+    _viewModel = .init(wrappedValue: .init(statusId: statusId))
   }
-  
+
+  public init(status: Status) {
+    _viewModel = .init(wrappedValue: .init(status: status))
+  }
+
   public init(remoteStatusURL: URL) {
-    _viewModel = StateObject(wrappedValue: .init(remoteStatusURL: remoteStatusURL))
+    _viewModel = .init(wrappedValue: .init(remoteStatusURL: remoteStatusURL))
   }
-  
+
   public var body: some View {
-    ScrollViewReader { proxy in
-      ZStack {
-        ScrollView {
-          LazyVStack {
-            Group {
-              switch viewModel.state {
-              case .loading:
-                ForEach(Status.placeholders()) { status in
-                  StatusRowView(viewModel: .init(status: status, isCompact: false))
-                    .padding(.horizontal, .layoutPadding)
-                    .redacted(reason: .placeholder)
-                    .shimmering()
-                  Divider()
-                    .padding(.vertical, .dividerPadding)
-                }
-              case let .display(status, context):
-                if !context.ancestors.isEmpty {
-                  ForEach(context.ancestors) { ancestor in
-                    StatusRowView(viewModel: .init(status: ancestor, isCompact: false))
-                      .padding(.horizontal, .layoutPadding)
-                    Divider()
-                      .padding(.vertical, .dividerPadding)
-                  }
-                }
-                StatusRowView(viewModel: .init(status: status,
-                                               isCompact: false,
-                                               isFocused: true))
-                .padding(.horizontal, .layoutPadding)
-                .id(status.id)
-                Divider()
-                  .padding(.bottom, .dividerPadding * 2)
-                if !context.descendants.isEmpty {
-                  ForEach(context.descendants) { descendant in
-                    StatusRowView(viewModel: .init(status: descendant, isCompact: false))
-                      .padding(.horizontal, .layoutPadding)
-                    Divider()
-                      .padding(.vertical, .dividerPadding)
-                  }
-                }
-                
-              case .error:
-                ErrorView(title: "status.error.title",
-                          message: "status.error.message",
-                          buttonTitle: "action.retry") {
-                  Task {
-                    await viewModel.fetch()
-                  }
-                }
-              }
+    GeometryReader { reader in
+      ScrollViewReader { proxy in
+        List {
+          if isLoaded {
+            topPaddingView
+          }
+
+          switch viewModel.state {
+          case .loading:
+            loadingDetailView
+
+          case let .display(statuses):
+            makeStatusesListView(statuses: statuses)
+
+            if !isLoaded {
+              loadingContextView
             }
-            .frame(maxWidth: .maxColumnWidth)
+
+          #if !os(visionOS)
+            Rectangle()
+              .foregroundColor(theme.secondaryBackgroundColor)
+              .frame(minHeight: reader.frame(in: .local).size.height - statusHeight)
+              .listRowSeparator(.hidden)
+              .listRowBackground(theme.secondaryBackgroundColor)
+              .listRowInsets(.init())
+              .accessibilityHidden(true)
+          #endif
+
+          case .error:
+            errorView
           }
-          .padding(.top, .layoutPadding)
         }
+        .environment(\.defaultMinListRowHeight, 1)
+        .listStyle(.plain)
+        #if !os(visionOS)
+        .scrollContentBackground(.hidden)
         .background(theme.primaryBackgroundColor)
-      }
-      .task {
-        guard !isLoaded else { return }
-        isLoaded = true
-        viewModel.client = client
-        let result = await viewModel.fetch()
-        if !result {
-          if let url = viewModel.remoteStatusURL {
-            openURL(url)
-          }
-          DispatchQueue.main.async {
-            _ = routerPath.path.popLast()
+        #endif
+        .onChange(of: viewModel.scrollToId) { _, newValue in
+          if let newValue {
+            viewModel.scrollToId = nil
+            proxy.scrollTo(newValue, anchor: .top)
           }
         }
-        DispatchQueue.main.async {
-          proxy.scrollTo(viewModel.statusId, anchor: .center)
+        .task {
+          guard !isLoaded else { return }
+          viewModel.client = client
+          viewModel.routerPath = routerPath
+          let result = await viewModel.fetch()
+          isLoaded = true
+
+          if !result {
+            if let url = viewModel.remoteStatusURL {
+              await UIApplication.shared.open(url)
+            }
+            DispatchQueue.main.async {
+              _ = routerPath.path.popLast()
+            }
+          }
         }
       }
-      .onChange(of: watcher.latestEvent?.id) { _ in
+      .refreshable {
+        Task {
+          await viewModel.fetch()
+        }
+      }
+      .onChange(of: watcher.latestEvent?.id) {
         guard let lastEvent = watcher.latestEvent else { return }
         viewModel.handleEvent(event: lastEvent, currentAccount: currentAccount.account)
       }
     }
     .navigationTitle(viewModel.title)
     .navigationBarTitleDisplayMode(.inline)
+  }
+
+  private func makeStatusesListView(statuses: [Status]) -> some View {
+    ForEach(statuses) { status in
+      let (indentationLevel, extraInsets) = viewModel.getIndentationLevel(id: status.id, maxIndent: userPreferences.getRealMaxIndent())
+      let viewModel: StatusRowViewModel = .init(status: status,
+                                                client: client,
+                                                routerPath: routerPath,
+                                                scrollToId: $viewModel.scrollToId)
+      let isFocused = self.viewModel.statusId == status.id
+
+      StatusRowView(viewModel: viewModel)
+        .environment(\.extraLeadingInset, !isCompact ? extraInsets : 0)
+        .environment(\.indentationLevel, !isCompact ? indentationLevel : 0)
+        .environment(\.isStatusFocused, isFocused)
+        .overlay {
+          if isFocused {
+            GeometryReader { reader in
+              VStack {}
+                .onAppear {
+                  statusHeight = reader.size.height
+                }
+            }
+          }
+        }
+        .id(status.id)
+        #if !os(visionOS)
+        .listRowBackground(viewModel.highlightRowColor)
+        #endif
+        .listRowInsets(.init(top: 12,
+                             leading: .layoutPadding,
+                             bottom: 12,
+                             trailing: .layoutPadding))
+    }
+  }
+
+  private var errorView: some View {
+    ErrorView(title: "status.error.title",
+              message: "status.error.message",
+              buttonTitle: "action.retry")
+    {
+      Task {
+        await viewModel.fetch()
+      }
+    }
+    #if !os(visionOS)
+    .listRowBackground(theme.primaryBackgroundColor)
+    #endif
+    .listRowSeparator(.hidden)
+  }
+
+  private var loadingDetailView: some View {
+    ForEach(Status.placeholders()) { status in
+      StatusRowView(viewModel: .init(status: status, client: client, routerPath: routerPath))
+        .redacted(reason: .placeholder)
+        .allowsHitTesting(false)
+    }
+  }
+
+  private var loadingContextView: some View {
+    HStack {
+      Spacer()
+      ProgressView()
+      Spacer()
+    }
+    .frame(height: 50)
+    .listRowSeparator(.hidden)
+    #if !os(visionOS)
+    .listRowBackground(theme.secondaryBackgroundColor)
+    #endif
+    .listRowInsets(.init())
+  }
+
+  private var topPaddingView: some View {
+    HStack { EmptyView() }
+      #if !os(visionOS)
+      .listRowBackground(theme.primaryBackgroundColor)
+      #endif
+      .listRowSeparator(.hidden)
+      .listRowInsets(.init())
+      .frame(height: .layoutPadding)
+      .accessibilityHidden(true)
   }
 }

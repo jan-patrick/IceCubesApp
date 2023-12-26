@@ -1,118 +1,285 @@
 import DesignSystem
 import EmojiText
 import Env
+import Foundation
 import Models
 import Network
 import Shimmer
 import SwiftUI
 
+@MainActor
 public struct StatusRowView: View {
+  @Environment(\.openWindow) private var openWindow
+  @Environment(\.isInCaptureMode) private var isInCaptureMode: Bool
   @Environment(\.redactionReasons) private var reasons
-  @EnvironmentObject private var preferences: UserPreferences
-  @EnvironmentObject private var account: CurrentAccount
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var routerPath: RouterPath
-  @StateObject var viewModel: StatusRowViewModel
+  @Environment(\.isCompact) private var isCompact: Bool
+  @Environment(\.accessibilityVoiceOverEnabled) private var accessibilityVoiceOverEnabled
+  @Environment(\.isStatusFocused) private var isFocused
+  @Environment(\.indentationLevel) private var indentationLevel
+  @Environment(\.isHomeTimeline) private var isHomeTimeline
+
+  @Environment(QuickLook.self) private var quickLook
+  @Environment(Theme.self) private var theme
+
+  @State private var viewModel: StatusRowViewModel
+  @State private var showSelectableText: Bool = false
 
   public init(viewModel: StatusRowViewModel) {
-    _viewModel = StateObject(wrappedValue: viewModel)
+    _viewModel = .init(initialValue: viewModel)
   }
 
   var contextMenu: some View {
-    StatusRowContextMenu(viewModel: viewModel)
+    StatusRowContextMenu(viewModel: viewModel, showTextForSelection: $showSelectableText)
   }
 
   public var body: some View {
-    if viewModel.isFiltered, let filter = viewModel.filter {
-      switch filter.filter.filterAction {
-      case .warn:
-        makeFilterView(filter: filter.filter)
-      case .hide:
-        EmptyView()
+    HStack(spacing: 0) {
+      if !isCompact {
+        HStack(spacing: 3) {
+          ForEach(0 ..< indentationLevel, id: \.self) { level in
+            Rectangle()
+              .fill(theme.tintColor)
+              .frame(width: 2)
+              .accessibilityHidden(true)
+              .opacity((indentationLevel == level + 1) ? 1 : 0.15)
+          }
+        }
+        if indentationLevel > 0 {
+          Spacer(minLength: 8)
+        }
       }
-    } else {
       VStack(alignment: .leading) {
-        if !viewModel.isCompact, theme.avatarPosition == .leading {
-          reblogView
-          replyView
-        }
-        HStack(alignment: .top, spacing: .statusColumnsSpacing) {
-          if !viewModel.isCompact,
-             theme.avatarPosition == .leading,
-             let status: AnyStatus = viewModel.status.reblog ?? viewModel.status
-          {
-            Button {
-              routerPath.navigate(to: .accountDetailWithAccount(account: status.account))
-            } label: {
-              AvatarView(url: status.account.avatar, size: .status)
-            }
+        if viewModel.isFiltered, let filter = viewModel.filter {
+          switch filter.filter.filterAction {
+          case .warn:
+            makeFilterView(filter: filter.filter)
+          case .hide:
+            EmptyView()
           }
-          VStack(alignment: .leading) {
-            if !viewModel.isCompact, theme.avatarPosition == .top {
-              reblogView
-              replyView
+        } else {
+          if !isCompact, theme.avatarPosition == .leading {
+            Group {
+              StatusRowReblogView(viewModel: viewModel)
+              StatusRowReplyView(viewModel: viewModel)
             }
-            statusView
-            if viewModel.showActions && !viewModel.isRemote, theme.statusActionsDisplay != .none {
-              StatusActionsView(viewModel: viewModel)
-                .padding(.top, 8)
-                .tint(viewModel.isFocused ? theme.tintColor : .gray)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                  viewModel.navigateToDetail(routerPath: routerPath)
+            .padding(.leading, AvatarView.FrameConfig.status.width + .statusColumnsSpacing)
+          }
+          HStack(alignment: .top, spacing: .statusColumnsSpacing) {
+            if !isCompact,
+               theme.avatarPosition == .leading
+            {
+              Button {
+                viewModel.navigateToAccountDetail(account: viewModel.finalStatus.account)
+              } label: {
+                AvatarView(viewModel.finalStatus.account.avatar)
+              }
+            }
+            VStack(alignment: .leading) {
+              if !isCompact, theme.avatarPosition == .top {
+                StatusRowReblogView(viewModel: viewModel)
+                StatusRowReplyView(viewModel: viewModel)
+                if isHomeTimeline {
+                  StatusRowTagView(viewModel: viewModel)
                 }
+              }
+              VStack(alignment: .leading, spacing: 8) {
+                if !isCompact {
+                  StatusRowHeaderView(viewModel: viewModel)
+                }
+                StatusRowContentView(viewModel: viewModel)
+                  .contentShape(Rectangle())
+                  .onTapGesture {
+                    guard !isFocused else { return }
+                    viewModel.navigateToDetail()
+                  }
+                  .accessibilityActions {
+                    if isFocused, viewModel.showActions {
+                      accessibilityActions
+                    }
+                  }
+              }
+              VStack(alignment: .leading, spacing: 12) {
+                if viewModel.showActions, isFocused || theme.statusActionsDisplay != .none, !isInCaptureMode {
+                  StatusRowActionsView(viewModel: viewModel)
+                    .padding(.top, 8)
+                    .tint(isFocused ? theme.tintColor : .gray)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                      guard !isFocused else { return }
+                      viewModel.navigateToDetail()
+                    }
+                }
+
+                if isFocused, !isCompact {
+                  StatusRowDetailView(viewModel: viewModel)
+                }
+              }
             }
           }
         }
       }
-      .onAppear {
-        if reasons.isEmpty {
-          viewModel.client = client
-          if !viewModel.isCompact, viewModel.embeddedStatus == nil {
-            Task {
-              await viewModel.loadEmbeddedStatus()
-            }
-          }
-          if preferences.autoExpandSpoilers == true && viewModel.displaySpoiler {
-            viewModel.displaySpoiler = false
+    }
+    .onAppear {
+      viewModel.markSeen()
+      if reasons.isEmpty {
+        if !isCompact, viewModel.embeddedStatus == nil {
+          Task {
+            await viewModel.loadEmbeddedStatus()
           }
         }
       }
-      .contextMenu {
-        contextMenu
-      }
-      .accessibilityElement(children: viewModel.isFocused ? .contain : .combine)
-      .accessibilityActions {
-        // Add the individual mentions as accessibility actions
-        ForEach(viewModel.status.mentions, id: \.id) { mention in
-          Button("@\(mention.username)") {
-            routerPath.navigate(to: .accountDetail(id: mention.id))
+    }
+    .contextMenu {
+      contextMenu
+        .onAppear {
+          Task {
+            await viewModel.loadAuthorRelationship()
           }
         }
+    }
+    .swipeActions(edge: .trailing) {
+      // The actions associated with the swipes are exposed as custom accessibility actions and there is no way to remove them.
+      if !isCompact, accessibilityVoiceOverEnabled == false {
+        StatusRowSwipeView(viewModel: viewModel, mode: .trailing)
+      }
+    }
+    .swipeActions(edge: .leading) {
+      // The actions associated with the swipes are exposed as custom accessibility actions and there is no way to remove them.
+      if !isCompact, accessibilityVoiceOverEnabled == false {
+        StatusRowSwipeView(viewModel: viewModel, mode: .leading)
+      }
+    }
+    #if os(visionOS)
+    .listRowBackground(RoundedRectangle(cornerRadius: 8)
+      .foregroundStyle(Material.regular))
+    .listRowHoverEffect(.lift)
+    #else
+    .listRowBackground(viewModel.highlightRowColor)
+    #endif
+    .listRowInsets(.init(top: 12,
+                         leading: .layoutPadding,
+                         bottom: 12,
+                         trailing: .layoutPadding))
+    .accessibilityElement(children: isFocused ? .contain : .combine)
+    .accessibilityLabel(isFocused == false && accessibilityVoiceOverEnabled
+      ? CombinedAccessibilityLabel(viewModel: viewModel).finalLabel() : Text(""))
+    .accessibilityHidden(viewModel.filter?.filter.filterAction == .hide)
+    .accessibilityAction {
+      guard !isFocused else { return }
+      viewModel.navigateToDetail()
+    }
+    .accessibilityActions {
+      if isFocused == false, viewModel.showActions {
+        accessibilityActions
+      }
+    }
+    .background {
+      Color.clear
+        .contentShape(Rectangle())
+        .onTapGesture {
+          guard !isFocused else { return }
+          viewModel.navigateToDetail()
+        }
+    }
+    .overlay {
+      if viewModel.isLoadingRemoteContent {
+        remoteContentLoadingView
+      }
+    }
+    .alert(isPresented: $viewModel.showDeleteAlert, content: {
+      Alert(
+        title: Text("status.action.delete.confirm.title"),
+        message: Text("status.action.delete.confirm.message"),
+        primaryButton: .destructive(
+          Text("status.action.delete"))
+        {
+          Task {
+            await viewModel.delete()
+          }
+        },
+        secondaryButton: .cancel()
+      )
+    })
+    .alignmentGuide(.listRowSeparatorLeading) { _ in
+      -100
+    }
+    .sheet(isPresented: $showSelectableText) {
+      let content = viewModel.status.reblog?.content.asSafeMarkdownAttributedString ?? viewModel.status.content.asSafeMarkdownAttributedString
+      SelectTextView(content: content)
+    }
+    .environment(
+      StatusDataControllerProvider.shared.dataController(for: viewModel.finalStatus,
+                                                         client: viewModel.client)
+    )
+  }
 
-        Button(viewModel.displaySpoiler ? "status.show-more" : "status.show-less") {
-          withAnimation {
-            viewModel.displaySpoiler.toggle()
+  @ViewBuilder
+  private var accessibilityActions: some View {
+    // Add reply and quote, which are lost when the swipe actions are removed
+    Button("status.action.reply") {
+      HapticManager.shared.fireHaptic(.notification(.success))
+      viewModel.routerPath.presentedSheet = .replyToStatusEditor(status: viewModel.status)
+    }
+
+    Button("settings.swipeactions.status.action.quote") {
+      HapticManager.shared.fireHaptic(.notification(.success))
+      viewModel.routerPath.presentedSheet = .quoteStatusEditor(status: viewModel.status)
+    }
+    .disabled(viewModel.status.visibility == .direct || viewModel.status.visibility == .priv)
+
+    if viewModel.finalStatus.mediaAttachments.isEmpty == false {
+      Button("accessibility.status.media-viewer-action.label") {
+        HapticManager.shared.fireHaptic(.notification(.success))
+        let attachments = viewModel.finalStatus.mediaAttachments
+        #if targetEnvironment(macCatalyst)
+          openWindow(value: WindowDestinationMedia.mediaViewer(
+            attachments: attachments,
+            selectedAttachment: attachments[0]
+          ))
+        #else
+          quickLook.prepareFor(selectedMediaAttachment: attachments[0], mediaAttachments: attachments)
+        #endif
+      }
+    }
+
+    Button(viewModel.displaySpoiler ? "status.show-more" : "status.show-less") {
+      withAnimation {
+        viewModel.displaySpoiler.toggle()
+      }
+    }
+
+    Button("@\(viewModel.status.account.username)") {
+      HapticManager.shared.fireHaptic(.notification(.success))
+      viewModel.routerPath.navigate(to: .accountDetail(id: viewModel.status.account.id))
+    }
+
+    // Add a reference to the post creator
+    if viewModel.status.account != viewModel.finalStatus.account {
+      Button("@\(viewModel.finalStatus.account.username)") {
+        HapticManager.shared.fireHaptic(.notification(.success))
+        viewModel.routerPath.navigate(to: .accountDetail(id: viewModel.finalStatus.account.id))
+      }
+    }
+
+    // Add in each detected link in the content
+    ForEach(viewModel.finalStatus.content.links) { link in
+      switch link.type {
+      case .url:
+        if UIApplication.shared.canOpenURL(link.url) {
+          Button("accessibility.tabs.timeline.content-link-\(link.title)") {
+            HapticManager.shared.fireHaptic(.notification(.success))
+            _ = viewModel.routerPath.handle(url: link.url)
           }
         }
-
-        Button("@\(viewModel.status.account.username)") {
-          routerPath.navigate(to: .accountDetail(id: viewModel.status.account.id))
+      case .hashtag:
+        Button("accessibility.tabs.timeline.content-hashtag-\(link.title)") {
+          HapticManager.shared.fireHaptic(.notification(.success))
+          _ = viewModel.routerPath.handle(url: link.url)
         }
-
-        contextMenu
-      }
-      .background {
-        Color.clear
-          .contentShape(Rectangle())
-          .onTapGesture {
-            viewModel.navigateToDetail(routerPath: routerPath)
-          }
-      }
-      .overlay {
-        if viewModel.isLoadingRemoteContent {
-          remoteContentLoadingView
+      case .mention:
+        Button("\(link.title)") {
+          HapticManager.shared.fireHaptic(.notification(.success))
+          _ = viewModel.routerPath.handle(url: link.url)
         }
       }
     }
@@ -129,261 +296,11 @@ public struct StatusRowView: View {
         Text("status.filter.show-anyway")
       }
     }
-  }
-
-  @ViewBuilder
-  private var reblogView: some View {
-    if viewModel.status.reblog != nil {
-      HStack(spacing: 2) {
-        Image(systemName: "arrow.left.arrow.right.circle.fill")
-        AvatarView(url: viewModel.status.account.avatar, size: .boost)
-        if viewModel.status.account.username != account.account?.username {
-          EmojiTextApp(.init(stringValue: viewModel.status.account.safeDisplayName), emojis: viewModel.status.account.emojis)
-          Text("status.row.was-boosted")
-        } else {
-          Text("status.row.you-boosted")
-        }
-      }
-      .accessibilityElement()
-      .accessibilityLabel(
-        Text("\(viewModel.status.account.safeDisplayName)")
-          + Text(" ")
-          + Text(viewModel.status.account.username != account.account?.username ? "status.row.was-boosted" : "status.row.you-boosted")
-      )
-      .font(.scaledFootnote)
-      .foregroundColor(.gray)
-      .fontWeight(.semibold)
-      .onTapGesture {
-        viewModel.navigateToAccountDetail(account: viewModel.status.account, routerPath: routerPath)
-      }
-    }
-  }
-
-  @ViewBuilder
-  var replyView: some View {
-    if let accountId = viewModel.status.inReplyToAccountId,
-       let mention = viewModel.status.mentions.first(where: { $0.id == accountId })
-    {
-      HStack(spacing: 2) {
-        Image(systemName: "arrowshape.turn.up.left.fill")
-        Text("status.row.was-reply")
-        Text(mention.username)
-      }
-      .font(.scaledFootnote)
-      .foregroundColor(.gray)
-      .fontWeight(.semibold)
-      .onTapGesture {
-        viewModel.navigateToMention(mention: mention, routerPath: routerPath)
-      }
-    }
-  }
-
-  private var statusView: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      if let status: AnyStatus = viewModel.status.reblog ?? viewModel.status {
-        if !viewModel.isCompact {
-          HStack(alignment: .top) {
-            Button {
-              viewModel.navigateToAccountDetail(account: status.account, routerPath: routerPath)
-            } label: {
-              accountView(status: status)
-            }
-            .buttonStyle(.plain)
-            Spacer()
-            menuButton
-              .accessibilityHidden(true)
-          }
-          .accessibilityElement()
-          .accessibilityLabel(Text("\(status.account.displayName), \(status.createdAt.relativeFormatted)"))
-        }
-        makeStatusContentView(status: status)
-          .contentShape(Rectangle())
-          .onTapGesture {
-            viewModel.navigateToDetail(routerPath: routerPath)
-          }
-      }
-    }
-    .accessibilityElement(children: viewModel.isFocused ? .contain : .combine)
     .accessibilityAction {
-      viewModel.navigateToDetail(routerPath: routerPath)
+      viewModel.isFiltered = false
     }
   }
 
-  private func makeStatusContentView(status: AnyStatus) -> some View {
-    Group {
-      if !status.spoilerText.asRawText.isEmpty {
-        HStack(alignment: .top) {
-          Text("⚠︎")
-            .font(.system(.subheadline, weight: .bold))
-            .foregroundColor(.secondary)
-          EmojiTextApp(status.spoilerText, emojis: status.emojis, language: status.language)
-            .font(.system(.subheadline, weight: .bold))
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.leading)
-          Spacer()
-          Button {
-            withAnimation {
-              viewModel.displaySpoiler.toggle()
-            }
-          } label: {
-            Image(systemName: "chevron.down")
-              .rotationEffect(Angle(degrees: viewModel.displaySpoiler ? 0 : 180))
-          }
-          .buttonStyle(.bordered)
-          .accessibility(label: viewModel.displaySpoiler ? Text("status.show-more") : Text("status.show-less"))
-          .accessibilityHidden(true)
-        }
-        .onTapGesture { // make whole row tapable to make up for smaller button size
-          withAnimation {
-            viewModel.displaySpoiler.toggle()
-          }
-        }
-      }
-
-      if !viewModel.displaySpoiler {
-        HStack {
-          EmojiTextApp(status.content, emojis: status.emojis, language: status.language)
-            .font(.scaledBody)
-            .environment(\.openURL, OpenURLAction { url in
-              routerPath.handleStatus(status: status, url: url)
-            })
-          Spacer()
-        }
-
-        makeTranslateView(status: status)
-
-        if let poll = status.poll {
-          StatusPollView(poll: poll, status: status)
-        }
-
-        embedStatusView
-
-        makeMediasView(status: status)
-          .accessibilityHidden(!viewModel.isFocused)
-        makeCardView(status: status)
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func accountView(status: AnyStatus) -> some View {
-    HStack(alignment: .center) {
-      if theme.avatarPosition == .top {
-        AvatarView(url: status.account.avatar, size: .status)
-      }
-      VStack(alignment: .leading, spacing: 0) {
-        EmojiTextApp(.init(stringValue: status.account.safeDisplayName), emojis: status.account.emojis)
-          .font(.scaledSubheadline)
-          .fontWeight(.semibold)
-        Group {
-          Text("@\(status.account.acct)") +
-            Text(" ⸱ ") +
-            Text(status.createdAt.relativeFormatted) +
-            Text(" ⸱ ") +
-            Text(Image(systemName: viewModel.status.visibility.iconName))
-        }
-        .font(.scaledFootnote)
-        .foregroundColor(.gray)
-      }
-    }
-  }
-
-  private var menuButton: some View {
-    Menu {
-      contextMenu
-    } label: {
-      Image(systemName: "ellipsis")
-        .frame(width: 30, height: 30)
-    }
-    .foregroundColor(.gray)
-    .contentShape(Rectangle())
-  }
-
-  @ViewBuilder
-  private func makeTranslateView(status: AnyStatus) -> some View {
-    if let userLang = preferences.serverPreferences?.postLanguage,
-       preferences.showTranslateButton,
-       status.language != nil,
-       userLang != status.language,
-       !status.content.asRawText.isEmpty,
-       viewModel.translation == nil
-    {
-      Button {
-        Task {
-          await viewModel.translate(userLang: userLang)
-        }
-      } label: {
-        if viewModel.isLoadingTranslation {
-          ProgressView()
-        } else {
-          Text("status.action.translate")
-        }
-      }
-    }
-
-    if let translation = viewModel.translation, !viewModel.isLoadingTranslation {
-      GroupBox {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(translation)
-            .font(.scaledBody)
-          Text("status.action.translated-label")
-            .font(.footnote)
-            .foregroundColor(.gray)
-        }
-      }
-      .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  @ViewBuilder
-  private func makeMediasView(status: AnyStatus) -> some View {
-    if !status.mediaAttachments.isEmpty {
-      if theme.statusDisplayStyle == .compact {
-        HStack {
-          StatusMediaPreviewView(attachments: status.mediaAttachments,
-                                 sensitive: status.sensitive,
-                                 isNotifications: viewModel.isCompact)
-          Spacer()
-        }
-        .padding(.vertical, 4)
-      } else {
-        StatusMediaPreviewView(attachments: status.mediaAttachments,
-                               sensitive: status.sensitive,
-                               isNotifications: viewModel.isCompact)
-          .padding(.vertical, 4)
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func makeCardView(status: AnyStatus) -> some View {
-    if let card = status.card,
-       !viewModel.isEmbedLoading,
-       !viewModel.isCompact,
-       theme.statusDisplayStyle == .large,
-       status.content.statusesURLs.isEmpty,
-       status.mediaAttachments.isEmpty
-    {
-      StatusCardView(card: card)
-    }
-  }
-
-  @ViewBuilder
-  private var embedStatusView: some View {
-    if !reasons.contains(.placeholder) {
-      if !viewModel.isCompact, !viewModel.isEmbedLoading,
-         let embed = viewModel.embeddedStatus
-      {
-        StatusEmbeddedView(status: embed)
-          .fixedSize(horizontal: false, vertical: true)
-      } else if viewModel.isEmbedLoading, !viewModel.isCompact {
-        StatusEmbeddedView(status: .placeholder())
-          .redacted(reason: .placeholder)
-          .shimmering()
-      }
-    }
-  }
-  
   private var remoteContentLoadingView: some View {
     ZStack(alignment: .center) {
       VStack {
@@ -398,5 +315,125 @@ public struct StatusRowView: View {
     }
     .background(Color.black.opacity(0.40))
     .transition(.opacity)
+  }
+}
+
+/// A utility that creates a suitable combined accessibility label for a `StatusRowView` that is not focused.
+@MainActor
+private struct CombinedAccessibilityLabel {
+  let viewModel: StatusRowViewModel
+
+  var hasSpoiler: Bool {
+    viewModel.displaySpoiler && viewModel.finalStatus.spoilerText.asRawText.isEmpty == false
+  }
+
+  var isReply: Bool {
+    if let accountId = viewModel.status.inReplyToAccountId, viewModel.status.mentions.contains(where: { $0.id == accountId }) {
+      return true
+    }
+    return false
+  }
+
+  var isBoost: Bool {
+    viewModel.status.reblog != nil
+  }
+
+  var filter: Filter? {
+    guard viewModel.isFiltered else {
+      return nil
+    }
+    return viewModel.filter?.filter
+  }
+
+  func finalLabel() -> Text {
+    if let filter {
+      switch filter.filterAction {
+      case .warn:
+        Text("status.filter.filtered-by-\(filter.title)")
+      case .hide:
+        Text("")
+      }
+    } else {
+      userNamePreamble() +
+        Text(hasSpoiler
+          ? viewModel.finalStatus.spoilerText.asRawText
+          : viewModel.finalStatus.content.asRawText
+        ) +
+        Text(hasSpoiler
+          ? "status.editor.spoiler"
+          : ""
+        ) + Text(", ") +
+        pollText() +
+        imageAltText() +
+        Text(viewModel.finalStatus.createdAt.relativeFormatted) + Text(", ") +
+        Text("status.summary.n-replies \(viewModel.finalStatus.repliesCount)") + Text(", ") +
+        Text("status.summary.n-boosts \(viewModel.finalStatus.reblogsCount)") + Text(", ") +
+        Text("status.summary.n-favorites \(viewModel.finalStatus.favouritesCount)")
+    }
+  }
+
+  func userNamePreamble() -> Text {
+    switch (isReply, isBoost) {
+    case (true, false):
+      Text("accessibility.status.a-replied-to-\(finalUserDisplayName())") + Text(" ")
+    case (_, true):
+      Text("accessibility.status.a-boosted-b-\(userDisplayName())-\(finalUserDisplayName())") + Text(", ")
+    default:
+      Text(userDisplayName()) + Text(", ")
+    }
+  }
+
+  func userDisplayName() -> String {
+    viewModel.status.account.displayNameWithoutEmojis.count < 4
+      ? viewModel.status.account.safeDisplayName
+      : viewModel.status.account.displayNameWithoutEmojis
+  }
+
+  func finalUserDisplayName() -> String {
+    viewModel.finalStatus.account.displayNameWithoutEmojis.count < 4
+      ? viewModel.finalStatus.account.safeDisplayName
+      : viewModel.finalStatus.account.displayNameWithoutEmojis
+  }
+
+  func imageAltText() -> Text {
+    let descriptions = viewModel.finalStatus.mediaAttachments
+      .compactMap(\.description)
+
+    if descriptions.count == 1 {
+      return Text("accessibility.image.alt-text-\(descriptions[0])") + Text(", ")
+    } else if descriptions.count > 1 {
+      return Text("accessibility.image.alt-text-\(descriptions[0])") + Text(", ") + Text("accessibility.image.alt-text-more.label") + Text(", ")
+    } else if viewModel.finalStatus.mediaAttachments.isEmpty == false {
+      let differentTypes = Set(viewModel.finalStatus.mediaAttachments.compactMap(\.localizedTypeDescription)).sorted()
+      return Text("accessibility.status.contains-media.label-\(ListFormatter.localizedString(byJoining: differentTypes))") + Text(", ")
+    } else {
+      return Text("")
+    }
+  }
+
+  func pollText() -> Text {
+    if let poll = viewModel.finalStatus.poll {
+      let showPercentage = poll.expired || poll.voted ?? false
+      let title: LocalizedStringKey = poll.expired
+        ? "accessibility.status.poll.finished.label"
+        : "accessibility.status.poll.active.label"
+
+      return poll.options.enumerated().reduce(into: Text(title)) { text, pair in
+        let (index, option) = pair
+        let selected = poll.ownVotes?.contains(index) ?? false
+        let percentage = poll.safeVotersCount > 0 && option.votesCount != nil
+          ? Int(round(Double(option.votesCount!) / Double(poll.safeVotersCount) * 100))
+          : 0
+
+        text = text +
+          Text(selected ? "accessibility.status.poll.selected.label" : "") +
+          Text(", ") +
+          Text("accessibility.status.poll.option-prefix-\(index + 1)-of-\(poll.options.count)") +
+          Text(", ") +
+          Text(option.title) +
+          Text(showPercentage ? ", \(percentage)%. " : ". ")
+      }
+    }
+    return Text("")
   }
 }

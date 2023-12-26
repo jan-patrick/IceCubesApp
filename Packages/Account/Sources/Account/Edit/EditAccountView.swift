@@ -1,14 +1,17 @@
 import DesignSystem
+import Env
 import Models
 import Network
 import SwiftUI
 
+@MainActor
 public struct EditAccountView: View {
   @Environment(\.dismiss) private var dismiss
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var theme: Theme
+  @Environment(Client.self) private var client
+  @Environment(Theme.self) private var theme
+  @Environment(UserPreferences.self) private var userPrefs
 
-  @StateObject private var viewModel = EditAccountViewModel()
+  @State private var viewModel = EditAccountViewModel()
 
   public init() {}
 
@@ -19,12 +22,17 @@ public struct EditAccountView: View {
           loadingSection
         } else {
           aboutSections
+          fieldsSection
           postSettingsSection
           accountSection
         }
       }
+      .environment(\.editMode, .constant(.active))
+      #if !os(visionOS)
       .scrollContentBackground(.hidden)
       .background(theme.secondaryBackgroundColor)
+      .scrollDismissesKeyboard(.immediately)
+      #endif
       .navigationTitle("account.edit.navigation-title")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -50,7 +58,9 @@ public struct EditAccountView: View {
         Spacer()
       }
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   @ViewBuilder
@@ -63,11 +73,16 @@ public struct EditAccountView: View {
       TextField("account.edit.about", text: $viewModel.note, axis: .vertical)
         .frame(maxHeight: 150)
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   private var postSettingsSection: some View {
     Section("account.edit.post-settings.section-title") {
+      if !userPrefs.useInstanceContentSettings {
+        Text("account.edit.post-settings.content-settings-reference")
+      }
       Picker(selection: $viewModel.postPrivacy) {
         ForEach(Models.Visibility.supportDefault, id: \.rawValue) { privacy in
           Text(privacy.title).tag(privacy)
@@ -80,7 +95,9 @@ public struct EditAccountView: View {
         Label("account.edit.post-settings.sensitive", systemImage: "eye")
       }
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   private var accountSection: some View {
@@ -95,7 +112,45 @@ public struct EditAccountView: View {
         Label("account.edit.account-settings.discoverable", systemImage: "magnifyingglass")
       }
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
+  }
+
+  private var fieldsSection: some View {
+    Section("account.edit.metadata-section-title") {
+      ForEach($viewModel.fields) { $field in
+        VStack(alignment: .leading) {
+          TextField("account.edit.metadata-name-placeholder", text: $field.name)
+            .font(.scaledHeadline)
+          TextField("account.edit.metadata-value-placeholder", text: $field.value)
+            .emojiSize(Font.scaledBodyFont.emojiSize)
+            .emojiBaselineOffset(Font.scaledBodyFont.emojiBaselineOffset)
+            .foregroundColor(theme.tintColor)
+        }
+      }
+      .onMove(perform: { indexSet, newOffset in
+        viewModel.fields.move(fromOffsets: indexSet, toOffset: newOffset)
+      })
+      .onDelete { indexes in
+        if let index = indexes.first {
+          viewModel.fields.remove(at: index)
+        }
+      }
+      if viewModel.fields.count < 4 {
+        Button {
+          withAnimation {
+            viewModel.fields.append(.init(name: "", value: ""))
+          }
+        } label: {
+          Text("account.edit.add-metadata-button")
+            .foregroundColor(theme.tintColor)
+        }
+      }
+    }
+    #if !os(visionOS)
+    .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   @ToolbarContentBuilder
@@ -116,7 +171,7 @@ public struct EditAccountView: View {
         if viewModel.isSaving {
           ProgressView()
         } else {
-          Text("action.save")
+          Text("action.save").bold()
         }
       }
     }

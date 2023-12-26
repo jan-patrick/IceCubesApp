@@ -1,24 +1,64 @@
+import Combine
 import DesignSystem
 import Env
 import Models
+import NaturalLanguage
 import Network
 import PhotosUI
 import SwiftUI
 
 @MainActor
-public class StatusEditorViewModel: ObservableObject {
+@Observable public class StatusEditorViewModel: NSObject, Identifiable {
+  public let id = UUID()
+
   var mode: Mode
-  let generator = UINotificationFeedbackGenerator()
 
   var client: Client?
-  var currentAccount: Account?
+  var currentAccount: Account? {
+    didSet {
+      if let itemsProvider {
+        mediaContainers = []
+        processItemsProvider(items: itemsProvider)
+      }
+    }
+  }
+
   var theme: Theme?
   var preferences: UserPreferences?
+  var languageConfirmationDialogLanguages: (detected: String, selected: String)?
 
-  @Published var statusText = NSMutableAttributedString(string: "") {
+  var textView: UITextView? {
     didSet {
+      textView?.pasteDelegate = self
+    }
+  }
+
+  var selectedRange: NSRange {
+    get {
+      guard let textView else {
+        return .init(location: 0, length: 0)
+      }
+      return textView.selectedRange
+    }
+    set {
+      textView?.selectedRange = newValue
+    }
+  }
+
+  var markedTextRange: UITextRange? {
+    guard let textView else {
+      return nil
+    }
+    return textView.markedTextRange
+  }
+
+  var statusText = NSMutableAttributedString(string: "") {
+    didSet {
+      let range = selectedRange
       processText()
       checkEmbed()
+      textView?.attributedText = statusText
+      selectedRange = range
     }
   }
 
@@ -33,47 +73,57 @@ public class StatusEditorViewModel: ObservableObject {
     urlLengthAdjustments - statusText.string.utf16.count - spoilerTextCount
   }
 
-  @Published var backupStatusText: NSAttributedString?
+  private var itemsProvider: [NSItemProvider]?
 
-  @Published var showPoll: Bool = false
-  @Published var pollVotingFrequency = PollVotingFrequency.oneVote
-  @Published var pollDuration = PollDuration.oneDay
-  @Published var pollOptions: [String] = ["", ""]
+  var backupStatusText: NSAttributedString?
 
-  @Published var spoilerOn: Bool = false
-  @Published var spoilerText: String = ""
+  var showPoll: Bool = false
+  var pollVotingFrequency = PollVotingFrequency.oneVote
+  var pollDuration = Duration.oneDay
+  var pollOptions: [String] = ["", ""]
 
-  @Published var selectedRange: NSRange = .init(location: 0, length: 0)
-  @Published var markedTextRange: UITextRange? = nil
+  var spoilerOn: Bool = false
+  var spoilerText: String = ""
 
-  @Published var isPosting: Bool = false
-  @Published var selectedMedias: [PhotosPickerItem] = [] {
+  var isPosting: Bool = false
+  var mediaPickers: [PhotosPickerItem] = [] {
     didSet {
-      if selectedMedias.count > 4 {
-        selectedMedias = selectedMedias.prefix(4).map { $0 }
+      if mediaPickers.count > 4 {
+        mediaPickers = mediaPickers.prefix(4).map { $0 }
       }
-      isMediasLoading = true
-      inflateSelectedMedias()
+
+      let removedIDs = oldValue
+        .filter { !mediaPickers.contains($0) }
+        .compactMap(\.itemIdentifier)
+      mediaContainers.removeAll { removedIDs.contains($0.id) }
+
+      let newPickerItems = mediaPickers.filter { !oldValue.contains($0) }
+      if !newPickerItems.isEmpty {
+        isMediasLoading = true
+        for item in newPickerItems {
+          prepareToPost(for: item)
+        }
+      }
     }
   }
 
-  @Published var isMediasLoading: Bool = false
+  var isMediasLoading: Bool = false
 
-  @Published var mediasImages: [StatusEditorMediaContainer] = []
-  @Published var replyToStatus: Status?
-  @Published var embeddedStatus: Status?
+  var mediaContainers: [StatusEditorMediaContainer] = []
+  var replyToStatus: Status?
+  var embeddedStatus: Status?
 
-  @Published var customEmojis: [Emoji] = []
+  var customEmojiContainer: [StatusEditorCategorizedEmojiContainer] = []
 
-  @Published var postingError: String?
-  @Published var showPostingErrorAlert: Bool = false
+  var postingError: String?
+  var showPostingErrorAlert: Bool = false
 
   var canPost: Bool {
-    statusText.length > 0 || !mediasImages.isEmpty
+    statusText.length > 0 || !mediaContainers.isEmpty
   }
 
   var shouldDisablePollButton: Bool {
-    showPoll || !selectedMedias.isEmpty
+    !mediaPickers.isEmpty
   }
 
   var shouldDisplayDismissWarning: Bool {
@@ -86,11 +136,11 @@ public class StatusEditorViewModel: ObservableObject {
     return !modifiedStatusText.isEmpty && !mode.isInShareExtension
   }
 
-  @Published var visibility: Models.Visibility = .pub
+  var visibility: Models.Visibility = .pub
 
-  @Published var mentionsSuggestions: [Account] = []
-  @Published var tagsSuggestions: [Tag] = []
-  @Published var selectedLanguage: String?
+  var mentionsSuggestions: [Account] = []
+  var tagsSuggestions: [Tag] = []
+  var selectedLanguage: String?
   var hasExplicitlySelectedLanguage: Bool = false
   private var currentSuggestionRange: NSRange?
 
@@ -99,7 +149,8 @@ public class StatusEditorViewModel: ObservableObject {
   }
 
   private var mentionString: String?
-  private var uploadTask: Task<Void, Never>?
+
+  private var suggestedTask: Task<Void, Never>?
 
   init(mode: Mode) {
     self.mode = mode
@@ -107,13 +158,25 @@ public class StatusEditorViewModel: ObservableObject {
 
   func setInitialLanguageSelection(preference: String?) {
     switch mode {
-    case let .replyTo(status), let .edit(status):
+    case let .edit(status), let .quote(status):
       selectedLanguage = status.language
     default:
       break
     }
 
     selectedLanguage = selectedLanguage ?? preference ?? currentAccount?.source?.language
+  }
+
+  func evaluateLanguages() {
+    if let detectedLang = detectLanguage(text: statusText.string),
+       let selectedLanguage,
+       selectedLanguage != "",
+       selectedLanguage != detectedLang
+    {
+      languageConfirmationDialogLanguages = (detected: detectedLang, selected: selectedLanguage)
+    } else {
+      languageConfirmationDialogLanguages = nil
+    }
   }
 
   func postStatus() async -> Status? {
@@ -131,16 +194,17 @@ public class StatusEditorViewModel: ObservableObject {
                             visibility: visibility,
                             inReplyToId: mode.replyToStatus?.id,
                             spoilerText: spoilerOn ? spoilerText : nil,
-                            mediaIds: mediasImages.compactMap { $0.mediaAttachment?.id },
+                            mediaIds: mediaContainers.compactMap { $0.mediaAttachment?.id },
                             poll: pollData,
-                            language: selectedLanguage)
+                            language: selectedLanguage,
+                            mediaAttributes: mediaAttributes)
       switch mode {
       case .new, .replyTo, .quote, .mention, .shareExtension:
         postStatus = try await client.post(endpoint: Statuses.postStatus(json: data))
       case let .edit(status):
         postStatus = try await client.put(endpoint: Statuses.editStatus(id: status.id, json: data))
       }
-      generator.notificationOccurred(.success)
+      HapticManager.shared.fireHaptic(.notification(.success))
       if hasExplicitlySelectedLanguage, let selectedLanguage {
         preferences?.markLanguageAsSelected(isoCode: selectedLanguage)
       }
@@ -152,7 +216,7 @@ public class StatusEditorViewModel: ObservableObject {
         showPostingErrorAlert = true
       }
       isPosting = false
-      generator.notificationOccurred(.error)
+      HapticManager.shared.fireHaptic(.notification(.error))
       return nil
     }
   }
@@ -164,7 +228,6 @@ public class StatusEditorViewModel: ObservableObject {
     string.mutableString.insert(text, at: selectedRange.location)
     statusText = string
     selectedRange = NSRange(location: selectedRange.location + text.utf16.count, length: 0)
-    markedTextRange = nil
   }
 
   func replaceTextWith(text: String, inRange: NSRange) {
@@ -173,13 +236,11 @@ public class StatusEditorViewModel: ObservableObject {
     string.mutableString.insert(text, at: inRange.location)
     statusText = string
     selectedRange = NSRange(location: inRange.location + text.utf16.count, length: 0)
-    markedTextRange = nil
   }
 
   func replaceTextWith(text: String) {
     statusText = .init(string: text)
     selectedRange = .init(location: text.utf16.count, length: 0)
-    markedTextRange = nil
   }
 
   func prepareStatusText() {
@@ -187,6 +248,7 @@ public class StatusEditorViewModel: ObservableObject {
     case let .new(visibility):
       self.visibility = visibility
     case let .shareExtension(items):
+      itemsProvider = items
       visibility = .pub
       processItemsProvider(items: items)
     case let .replyTo(status):
@@ -200,52 +262,61 @@ public class StatusEditorViewModel: ObservableObject {
         }
         mentionString += "@\(mention.acct)"
       }
-      mentionString += " "
+      if !mentionString.isEmpty {
+        mentionString += " "
+      }
       replyToStatus = status
-      visibility = status.visibility
+      visibility = UserPreferences.shared.getReplyVisibility(of: status)
       statusText = .init(string: mentionString)
       selectedRange = .init(location: mentionString.utf16.count, length: 0)
-      markedTextRange = nil
       if !mentionString.isEmpty {
         self.mentionString = mentionString.trimmingCharacters(in: .whitespaces)
+      }
+      if !status.spoilerText.asRawText.isEmpty {
+        spoilerOn = true
+        spoilerText = status.spoilerText.asRawText
       }
     case let .mention(account, visibility):
       statusText = .init(string: "@\(account.acct) ")
       self.visibility = visibility
       selectedRange = .init(location: statusText.string.utf16.count, length: 0)
-      markedTextRange = nil
     case let .edit(status):
-      var rawText = NSAttributedString(status.content.asSafeMarkdownAttributedString).string
+      var rawText = status.content.asRawText.escape()
       for mention in status.mentions {
         rawText = rawText.replacingOccurrences(of: "@\(mention.username)", with: "@\(mention.acct)")
       }
       statusText = .init(string: rawText)
       selectedRange = .init(location: statusText.string.utf16.count, length: 0)
-      markedTextRange = nil
       spoilerOn = !status.spoilerText.asRawText.isEmpty
       spoilerText = status.spoilerText.asRawText
       visibility = status.visibility
-      mediasImages = status.mediaAttachments.map { .init(image: nil,
-                                                         movieTransferable: nil,
-                                                         mediaAttachment: $0,
-                                                         error: nil) }
+      mediaContainers = status.mediaAttachments.map {
+        StatusEditorMediaContainer(
+          id: UUID().uuidString,
+          image: nil,
+          movieTransferable: nil,
+          gifTransferable: nil,
+          mediaAttachment: $0,
+          error: nil
+        )
+      }
     case let .quote(status):
       embeddedStatus = status
       if let url = embeddedStatusURL {
         statusText = .init(string: "\n\nFrom: @\(status.reblog?.account.acct ?? status.account.acct)\n\(url)")
         selectedRange = .init(location: 0, length: 0)
-        markedTextRange = nil
       }
     }
   }
 
   private func processText() {
     guard markedTextRange == nil else { return }
-    statusText.addAttributes([.foregroundColor: UIColor(Color.label),
-                              .backgroundColor: .clear,
-                              .underlineColor: .clear],
+    statusText.addAttributes([.foregroundColor: UIColor(Theme.shared.labelColor),
+                              .font: Font.scaledBodyUIFont,
+                              .backgroundColor: UIColor.clear,
+                              .underlineColor: UIColor.clear],
                              range: NSMakeRange(0, statusText.string.utf16.count))
-    let hashtagPattern = "(#+[a-zA-Z0-9(_)]{1,})"
+    let hashtagPattern = "(#+[\\w0-9(_)]{1,})"
     let mentionPattern = "(@+[a-zA-Z0-9(_).-]{1,})"
     let urlPattern = "(?i)https?://(?:www\\.)?\\S+(?:/|\\b)"
 
@@ -257,14 +328,14 @@ public class StatusEditorViewModel: ObservableObject {
       let range = NSMakeRange(0, statusText.string.utf16.count)
       var ranges = hashtagRegex.matches(in: statusText.string,
                                         options: [],
-                                        range: range).map { $0.range }
+                                        range: range).map(\.range)
       ranges.append(contentsOf: mentionRegex.matches(in: statusText.string,
                                                      options: [],
-                                                     range: range).map { $0.range })
+                                                     range: range).map(\.range))
 
       let urlRanges = urlRegex.matches(in: statusText.string,
                                        options: [],
-                                       range: range).map { $0.range }
+                                       range: range).map(\.range)
 
       var foundSuggestionRange = false
       for nsRange in ranges {
@@ -287,10 +358,8 @@ public class StatusEditorViewModel: ObservableObject {
       var numUrls = 0
 
       for range in urlRanges {
-        if range.length > maxLengthOfUrl {
-          numUrls += 1
-          totalUrlLength += range.length
-        }
+        numUrls += 1
+        totalUrlLength += range.length
 
         statusText.addAttributes([.foregroundColor: UIColor(theme?.tintColor ?? .brand),
                                   .underlineStyle: NSUnderlineStyle.single.rawValue,
@@ -300,28 +369,47 @@ public class StatusEditorViewModel: ObservableObject {
 
       urlLengthAdjustments = totalUrlLength - (maxLengthOfUrl * numUrls)
 
-      var mediaAdded = false
       statusText.enumerateAttributes(in: range) { attributes, range, _ in
-        if let attachment = attributes[.attachment] as? NSTextAttachment, let image = attachment.image {
-          mediasImages.append(.init(image: image,
-                                    movieTransferable: nil,
-                                    mediaAttachment: nil,
-                                    error: nil))
-          statusText.removeAttribute(.attachment, range: range)
-          statusText.mutableString.deleteCharacters(in: range)
-          mediaAdded = true
-        } else if attributes[.link] != nil {
+        if attributes[.link] != nil {
           statusText.removeAttribute(.link, range: range)
         }
-      }
-
-      if mediaAdded {
-        processMediasToUpload()
       }
     } catch {}
   }
 
   // MARK: - Shar sheet / Item provider
+
+  func processURLs(urls: [URL]) {
+    isMediasLoading = true
+    let items = urls.filter { $0.startAccessingSecurityScopedResource() }
+      .compactMap { NSItemProvider(contentsOf: $0) }
+    processItemsProvider(items: items)
+  }
+
+  func processGIFData(data: Data) {
+    isMediasLoading = true
+    let url = URL.temporaryDirectory.appending(path: "\(UUID().uuidString).gif")
+    try? data.write(to: url)
+    let container = StatusEditorMediaContainer(id: UUID().uuidString,
+                                               image: nil,
+                                               movieTransferable: nil,
+                                               gifTransferable: .init(url: url),
+                                               mediaAttachment: nil,
+                                               error: nil)
+    prepareToPost(for: container)
+  }
+
+  func processCameraPhoto(image: UIImage) {
+    let container = StatusEditorMediaContainer(
+      id: UUID().uuidString,
+      image: image,
+      movieTransferable: nil,
+      gifTransferable: nil,
+      mediaAttachment: nil,
+      error: nil
+    )
+    prepareToPost(for: container)
+  }
 
   private func processItemsProvider(items: [NSItemProvider]) {
     Task {
@@ -331,30 +419,62 @@ public class StatusEditorViewModel: ObservableObject {
            let handledItemType = StatusEditorUTTypeSupported(rawValue: identifier)
         {
           do {
+            let compressor = StatusEditorCompressor()
             let content = try await handledItemType.loadItemContent(item: item)
             if let text = content as? String {
               initialText += "\(text) "
             } else if let image = content as? UIImage {
-              mediasImages.append(.init(image: image,
-                                        movieTransferable: nil,
-                                        mediaAttachment: nil,
-                                        error: nil))
+              let container = StatusEditorMediaContainer(
+                id: UUID().uuidString,
+                image: image,
+                movieTransferable: nil,
+                gifTransferable: nil,
+                mediaAttachment: nil,
+                error: nil
+              )
+              prepareToPost(for: container)
+            } else if let content = content as? ImageFileTranseferable,
+                      let compressedData = await compressor.compressImageFrom(url: content.url),
+                      let image = UIImage(data: compressedData)
+            {
+              let container = StatusEditorMediaContainer(
+                id: UUID().uuidString,
+                image: image,
+                movieTransferable: nil,
+                gifTransferable: nil,
+                mediaAttachment: nil,
+                error: nil
+              )
+              prepareToPost(for: container)
             } else if let video = content as? MovieFileTranseferable {
-              mediasImages.append(.init(image: nil,
-                                        movieTransferable: video,
-                                        mediaAttachment: nil,
-                                        error: nil))
+              let container = StatusEditorMediaContainer(
+                id: UUID().uuidString,
+                image: nil,
+                movieTransferable: video,
+                gifTransferable: nil,
+                mediaAttachment: nil,
+                error: nil
+              )
+              prepareToPost(for: container)
+            } else if let gif = content as? GifFileTranseferable {
+              let container = StatusEditorMediaContainer(
+                id: UUID().uuidString,
+                image: nil,
+                movieTransferable: nil,
+                gifTransferable: gif,
+                mediaAttachment: nil,
+                error: nil
+              )
+              prepareToPost(for: container)
             }
-          } catch {}
+          } catch {
+            isMediasLoading = false
+          }
         }
       }
       if !initialText.isEmpty {
         statusText = .init(string: initialText)
         selectedRange = .init(location: statusText.string.utf16.count, length: 0)
-        markedTextRange = nil
-      }
-      if !mediasImages.isEmpty {
-        processMediasToUpload()
       }
     }
   }
@@ -388,7 +508,8 @@ public class StatusEditorViewModel: ObservableObject {
   private func loadAutoCompleteResults(query: String) {
     guard let client, query.utf8.count > 1 else { return }
     var query = query
-    Task {
+    suggestedTask?.cancel()
+    suggestedTask = Task {
       do {
         var results: SearchResults?
         switch query.first {
@@ -399,18 +520,24 @@ public class StatusEditorViewModel: ObservableObject {
                                                                  offset: 0,
                                                                  following: nil),
                                          forceVersion: .v2)
+          guard !Task.isCancelled else {
+            return
+          }
           withAnimation {
-            tagsSuggestions = results?.hashtags ?? []
+            tagsSuggestions = results?.hashtags.sorted(by: { $0.totalUses > $1.totalUses }) ?? []
           }
         case "@":
           query.removeFirst()
-          results = try await client.get(endpoint: Search.search(query: query,
-                                                                 type: "accounts",
-                                                                 offset: 0,
-                                                                 following: true),
-                                         forceVersion: .v2)
+          let accounts: [Account] = try await client.get(endpoint: Search.accountsSearch(query: query,
+                                                                                         type: nil,
+                                                                                         offset: 0,
+                                                                                         following: nil),
+                                                         forceVersion: .v1)
+          guard !Task.isCancelled else {
+            return
+          }
           withAnimation {
-            mentionsSuggestions = results?.accounts ?? []
+            mentionsSuggestions = accounts
           }
         default:
           break
@@ -439,7 +566,7 @@ public class StatusEditorViewModel: ObservableObject {
 
   // MARK: - OpenAI Prompt
 
-  func runOpenAI(prompt: OpenAIClient.Prompts) async {
+  func runOpenAI(prompt: OpenAIClient.Prompt) async {
     do {
       let client = OpenAIClient()
       let response = try await client.request(prompt)
@@ -451,103 +578,164 @@ public class StatusEditorViewModel: ObservableObject {
   // MARK: - Media related function
 
   private func indexOf(container: StatusEditorMediaContainer) -> Int? {
-    mediasImages.firstIndex(where: { $0.id == container.id })
+    mediaContainers.firstIndex(where: { $0.id == container.id })
   }
 
-  func inflateSelectedMedias() {
-    mediasImages = []
-
-    Task {
-      var medias: [StatusEditorMediaContainer] = []
-      for media in selectedMedias {
-        var file: (any Transferable)?
-        do {
-          file = try await media.loadTransferable(type: ImageFileTranseferable.self)
-          if file == nil {
-            file = try await media.loadTransferable(type: MovieFileTranseferable.self)
-          }
-        } catch {
-          medias.append(.init(image: nil,
-                              movieTransferable: nil,
-                              mediaAttachment: nil,
-                              error: error))
-        }
-
-        if var imageFile = file as? ImageFileTranseferable,
-           let image = imageFile.image
-        {
-          medias.append(.init(image: image,
-                              movieTransferable: nil,
-                              mediaAttachment: nil,
-                              error: nil))
-        } else if let videoFile = file as? MovieFileTranseferable {
-          medias.append(.init(image: nil,
-                              movieTransferable: videoFile,
-                              mediaAttachment: nil,
-                              error: nil))
-        }
-      }
-
-      DispatchQueue.main.async { [weak self] in
-        self?.mediasImages = medias
-        self?.processMediasToUpload()
+  func prepareToPost(for pickerItem: PhotosPickerItem) {
+    Task(priority: .high) {
+      if let container = await makeMediaContainer(from: pickerItem) {
+        self.mediaContainers.append(container)
+        await upload(container: container)
+        self.isMediasLoading = false
       }
     }
   }
 
-  private func processMediasToUpload() {
-    isMediasLoading = false
-    uploadTask?.cancel()
-    let mediasCopy = mediasImages
-    uploadTask = Task {
-      for media in mediasCopy {
-        if !Task.isCancelled {
-          await upload(container: media)
+  func prepareToPost(for container: StatusEditorMediaContainer) {
+    Task(priority: .high) {
+      self.mediaContainers.append(container)
+      await upload(container: container)
+      self.isMediasLoading = false
+    }
+  }
+
+  func makeMediaContainer(from pickerItem: PhotosPickerItem) async -> StatusEditorMediaContainer? {
+    await withTaskGroup(of: StatusEditorMediaContainer?.self, returning: StatusEditorMediaContainer?.self) { taskGroup in
+      taskGroup.addTask(priority: .high) { await Self.makeImageContainer(from: pickerItem) }
+      taskGroup.addTask(priority: .high) { await Self.makeGifContainer(from: pickerItem) }
+      taskGroup.addTask(priority: .high) { await Self.makeMovieContainer(from: pickerItem) }
+
+      for await container in taskGroup {
+        if let container {
+          taskGroup.cancelAll()
+          return container
         }
       }
+
+      return nil
     }
+  }
+
+  private static func makeGifContainer(from pickerItem: PhotosPickerItem) async -> StatusEditorMediaContainer? {
+    guard let gifFile = try? await pickerItem.loadTransferable(type: GifFileTranseferable.self) else { return nil }
+
+    return StatusEditorMediaContainer(
+      id: pickerItem.itemIdentifier ?? UUID().uuidString,
+      image: nil,
+      movieTransferable: nil,
+      gifTransferable: gifFile,
+      mediaAttachment: nil,
+      error: nil
+    )
+  }
+
+  private static func makeMovieContainer(from pickerItem: PhotosPickerItem) async -> StatusEditorMediaContainer? {
+    guard let movieFile = try? await pickerItem.loadTransferable(type: MovieFileTranseferable.self) else { return nil }
+
+    return StatusEditorMediaContainer(
+      id: pickerItem.itemIdentifier ?? UUID().uuidString,
+      image: nil,
+      movieTransferable: movieFile,
+      gifTransferable: nil,
+      mediaAttachment: nil,
+      error: nil
+    )
+  }
+
+  private static func makeImageContainer(from pickerItem: PhotosPickerItem) async -> StatusEditorMediaContainer? {
+    guard let imageFile = try? await pickerItem.loadTransferable(type: ImageFileTranseferable.self) else { return nil }
+
+    let compressor = StatusEditorCompressor()
+
+    guard let compressedData = await compressor.compressImageFrom(url: imageFile.url),
+          let image = UIImage(data: compressedData)
+    else { return nil }
+
+    return StatusEditorMediaContainer(
+      id: pickerItem.itemIdentifier ?? UUID().uuidString,
+      image: image,
+      movieTransferable: nil,
+      gifTransferable: nil,
+      mediaAttachment: nil,
+      error: nil
+    )
   }
 
   func upload(container: StatusEditorMediaContainer) async {
     if let index = indexOf(container: container) {
-      let originalContainer = mediasImages[index]
-      let newContainer = StatusEditorMediaContainer(image: originalContainer.image,
-                                                    movieTransferable: originalContainer.movieTransferable,
-                                                    mediaAttachment: nil,
-                                                    error: nil)
-      mediasImages[index] = newContainer
+      let originalContainer = mediaContainers[index]
+      guard originalContainer.mediaAttachment == nil else { return }
+      let newContainer = StatusEditorMediaContainer(
+        id: originalContainer.id,
+        image: originalContainer.image,
+        movieTransferable: originalContainer.movieTransferable,
+        gifTransferable: nil,
+        mediaAttachment: nil,
+        error: nil
+      )
+      mediaContainers[index] = newContainer
       do {
-        if let index = indexOf(container: newContainer) {
-          if let image = originalContainer.image,
-             let data = image.jpegData(compressionQuality: 0.90)
-          {
-            let uploadedMedia = try await uploadMedia(data: data, mimeType: "image/jpeg")
-            mediasImages[index] = .init(image: mode.isInShareExtension ? originalContainer.image : nil,
-                                        movieTransferable: nil,
-                                        mediaAttachment: uploadedMedia,
-                                        error: nil)
-            if let uploadedMedia, uploadedMedia.url == nil {
-              scheduleAsyncMediaRefresh(mediaAttachement: uploadedMedia)
-            }
-          } else if let videoURL = await originalContainer.movieTransferable?.compressedVideoURL,
-                    let data = try? Data(contentsOf: videoURL)
-          {
-            let uploadedMedia = try await uploadMedia(data: data, mimeType: videoURL.mimeType())
-            mediasImages[index] = .init(image: mode.isInShareExtension ? originalContainer.image : nil,
-                                        movieTransferable: originalContainer.movieTransferable,
-                                        mediaAttachment: uploadedMedia,
-                                        error: nil)
-            if let uploadedMedia, uploadedMedia.url == nil {
-              scheduleAsyncMediaRefresh(mediaAttachement: uploadedMedia)
-            }
+        let compressor = StatusEditorCompressor()
+        if let image = originalContainer.image {
+          let imageData = try await compressor.compressImageForUpload(image)
+          let uploadedMedia = try await uploadMedia(data: imageData, mimeType: "image/jpeg")
+          if let index = indexOf(container: newContainer) {
+            mediaContainers[index] = StatusEditorMediaContainer(
+              id: originalContainer.id,
+              image: mode.isInShareExtension ? originalContainer.image : nil,
+              movieTransferable: nil,
+              gifTransferable: nil,
+              mediaAttachment: uploadedMedia,
+              error: nil
+            )
+          }
+          if let uploadedMedia, uploadedMedia.url == nil {
+            scheduleAsyncMediaRefresh(mediaAttachement: uploadedMedia)
+          }
+        } else if let videoURL = originalContainer.movieTransferable?.url,
+                  let compressedVideoURL = await compressor.compressVideo(videoURL),
+                  let data = try? Data(contentsOf: compressedVideoURL)
+        {
+          let uploadedMedia = try await uploadMedia(data: data, mimeType: compressedVideoURL.mimeType())
+          if let index = indexOf(container: newContainer) {
+            mediaContainers[index] = StatusEditorMediaContainer(
+              id: originalContainer.id,
+              image: mode.isInShareExtension ? originalContainer.image : nil,
+              movieTransferable: originalContainer.movieTransferable,
+              gifTransferable: nil,
+              mediaAttachment: uploadedMedia,
+              error: nil
+            )
+          }
+          if let uploadedMedia, uploadedMedia.url == nil {
+            scheduleAsyncMediaRefresh(mediaAttachement: uploadedMedia)
+          }
+        } else if let gifData = originalContainer.gifTransferable?.data {
+          let uploadedMedia = try await uploadMedia(data: gifData, mimeType: "image/gif")
+          if let index = indexOf(container: newContainer) {
+            mediaContainers[index] = StatusEditorMediaContainer(
+              id: originalContainer.id,
+              image: mode.isInShareExtension ? originalContainer.image : nil,
+              movieTransferable: nil,
+              gifTransferable: originalContainer.gifTransferable,
+              mediaAttachment: uploadedMedia,
+              error: nil
+            )
+          }
+          if let uploadedMedia, uploadedMedia.url == nil {
+            scheduleAsyncMediaRefresh(mediaAttachement: uploadedMedia)
           }
         }
       } catch {
         if let index = indexOf(container: newContainer) {
-          mediasImages[index] = .init(image: originalContainer.image,
-                                      movieTransferable: nil,
-                                      mediaAttachment: nil,
-                                      error: error)
+          mediaContainers[index] = StatusEditorMediaContainer(
+            id: originalContainer.id,
+            image: originalContainer.image,
+            movieTransferable: nil,
+            gifTransferable: nil,
+            mediaAttachment: nil,
+            error: error
+          )
         }
       }
     }
@@ -557,22 +745,28 @@ public class StatusEditorViewModel: ObservableObject {
     Task {
       repeat {
         if let client,
-           let index = mediasImages.firstIndex(where: { $0.mediaAttachment?.id == mediaAttachement.id })
+           let index = mediaContainers.firstIndex(where: { $0.mediaAttachment?.id == mediaAttachement.id })
         {
-          guard mediasImages[index].mediaAttachment?.url == nil else {
+          guard mediaContainers[index].mediaAttachment?.url == nil else {
             return
           }
           do {
             let newAttachement: MediaAttachment = try await client.get(endpoint: Media.media(id: mediaAttachement.id,
-                                                                                             description: nil))
+                                                                                             json: nil))
             if newAttachement.url != nil {
-              let oldContainer = mediasImages[index]
-              mediasImages[index] = .init(image: oldContainer.image,
-                                          movieTransferable: oldContainer.movieTransferable,
-                                          mediaAttachment: newAttachement,
-                                          error: nil)
+              let oldContainer = mediaContainers[index]
+              mediaContainers[index] = StatusEditorMediaContainer(
+                id: mediaAttachement.id,
+                image: oldContainer.image,
+                movieTransferable: oldContainer.movieTransferable,
+                gifTransferable: oldContainer.gifTransferable,
+                mediaAttachment: newAttachement,
+                error: nil
+              )
             }
-          } catch {}
+          } catch {
+            print(error.localizedDescription)
+          }
         }
         try? await Task.sleep(for: .seconds(5))
       } while !Task.isCancelled
@@ -584,12 +778,24 @@ public class StatusEditorViewModel: ObservableObject {
     if let index = indexOf(container: container) {
       do {
         let media: MediaAttachment = try await client.put(endpoint: Media.media(id: attachment.id,
-                                                                                description: description))
-        mediasImages[index] = .init(image: nil,
-                                    movieTransferable: nil,
-                                    mediaAttachment: media,
-                                    error: nil)
-      } catch {}
+                                                                                json: .init(description: description)))
+        mediaContainers[index] = StatusEditorMediaContainer(
+          id: container.id,
+          image: nil,
+          movieTransferable: nil,
+          gifTransferable: nil,
+          mediaAttachment: media,
+          error: nil
+        )
+      } catch { print(error) }
+    }
+  }
+
+  private var mediaAttributes: [StatusData.MediaAttribute] = []
+  func editDescription(container: StatusEditorMediaContainer, description: String) async {
+    guard let attachment = container.mediaAttachment else { return }
+    if indexOf(container: container) != nil {
+      mediaAttributes.append(StatusData.MediaAttribute(id: attachment.id, description: description, thumbnail: nil, focus: nil))
     }
   }
 
@@ -606,12 +812,38 @@ public class StatusEditorViewModel: ObservableObject {
   // MARK: - Custom emojis
 
   func fetchCustomEmojis() async {
+    typealias EmojiContainer = StatusEditorCategorizedEmojiContainer
+
     guard let client else { return }
     do {
-      customEmojis = try await client.get(endpoint: CustomEmojis.customEmojis) ?? []
+      let customEmojis: [Emoji] = try await client.get(endpoint: CustomEmojis.customEmojis) ?? []
+      var emojiContainers: [EmojiContainer] = []
+
+      customEmojis.reduce([String: [Emoji]]()) { currentDict, emoji in
+        var dict = currentDict
+        let category = emoji.category ?? "Uncategorized"
+
+        if let emojis = dict[category] {
+          dict[category] = emojis + [emoji]
+        } else {
+          dict[category] = [emoji]
+        }
+
+        return dict
+      }.sorted(by: { lhs, rhs in
+        if rhs.key == "Uncategorized" { false }
+        else if lhs.key == "Uncategorized" { true }
+        else { lhs.key < rhs.key }
+      }).forEach { key, value in
+        emojiContainers.append(.init(categoryName: key, emojis: value))
+      }
+
+      customEmojiContainer = emojiContainers
     } catch {}
   }
 }
+
+// MARK: - DropDelegate
 
 extension StatusEditorViewModel: DropDelegate {
   public func performDrop(info: DropInfo) -> Bool {
@@ -620,3 +852,24 @@ extension StatusEditorViewModel: DropDelegate {
     return true
   }
 }
+
+// MARK: - UITextPasteDelegate
+
+extension StatusEditorViewModel: UITextPasteDelegate {
+  public func textPasteConfigurationSupporting(
+    _: UITextPasteConfigurationSupporting,
+    transform item: UITextPasteItem
+  ) {
+    if !item.itemProvider.registeredContentTypes(conformingTo: .image).isEmpty ||
+      !item.itemProvider.registeredContentTypes(conformingTo: .video).isEmpty ||
+      !item.itemProvider.registeredContentTypes(conformingTo: .gif).isEmpty
+    {
+      processItemsProvider(items: [item.itemProvider])
+      item.setNoResult()
+    } else {
+      item.setDefaultResult()
+    }
+  }
+}
+
+extension PhotosPickerItem: @unchecked Sendable {}

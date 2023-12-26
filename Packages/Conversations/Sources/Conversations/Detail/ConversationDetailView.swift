@@ -5,19 +5,20 @@ import Network
 import NukeUI
 import SwiftUI
 
+@MainActor
 public struct ConversationDetailView: View {
   private enum Constants {
     static let bottomAnchor = "bottom"
   }
 
-  @EnvironmentObject private var quickLook: QuickLook
-  @EnvironmentObject private var routerPath: RouterPath
-  @EnvironmentObject private var currentAccount: CurrentAccount
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var watcher: StreamWatcher
+  @Environment(QuickLook.self) private var quickLook
+  @Environment(RouterPath.self) private var routerPath
+  @Environment(CurrentAccount.self) private var currentAccount
+  @Environment(Client.self) private var client
+  @Environment(Theme.self) private var theme
+  @Environment(StreamWatcher.self) private var watcher
 
-  @StateObject private var viewModel: ConversationDetailViewModel
+  @State private var viewModel: ConversationDetailViewModel
 
   @FocusState private var isMessageFieldFocused: Bool
 
@@ -25,29 +26,30 @@ public struct ConversationDetailView: View {
   @State private var didAppear: Bool = false
 
   public init(conversation: Conversation) {
-    _viewModel = StateObject(wrappedValue: .init(conversation: conversation))
+    _viewModel = .init(initialValue: .init(conversation: conversation))
   }
 
   public var body: some View {
     ScrollViewReader { proxy in
-      ZStack(alignment: .bottom) {
-        ScrollView {
-          LazyVStack {
-            if viewModel.isLoadingMessages {
-              loadingView
-            }
-            ForEach(viewModel.messages) { message in
-              ConversationMessageView(message: message,
-                                      conversation: viewModel.conversation)
-                .padding(.vertical, 4)
-                .id(message.id)
-            }
-            bottomAnchorView
+      ScrollView {
+        LazyVStack {
+          if viewModel.isLoadingMessages {
+            loadingView
           }
-          .padding(.horizontal, .layoutPadding)
-          .padding(.bottom, 30)
+          ForEach(viewModel.messages) { message in
+            ConversationMessageView(message: message,
+                                    conversation: viewModel.conversation)
+              .padding(.vertical, 4)
+              .id(message.id)
+          }
+          bottomAnchorView
         }
-        .scrollDismissesKeyboard(.interactively)
+        .padding(.horizontal, .layoutPadding)
+      }
+      #if !os(visionOS)
+      .scrollDismissesKeyboard(.interactively)
+      #endif
+      .safeAreaInset(edge: .bottom) {
         inputTextView
       }
       .onAppear {
@@ -68,8 +70,10 @@ public struct ConversationDetailView: View {
       }
     }
     .navigationBarTitleDisplayMode(.inline)
+    #if !os(visionOS)
     .scrollContentBackground(.hidden)
     .background(theme.primaryBackgroundColor)
+    #endif
     .toolbar {
       ToolbarItem(placement: .principal) {
         if viewModel.conversation.accounts.count == 1,
@@ -77,13 +81,16 @@ public struct ConversationDetailView: View {
         {
           EmojiTextApp(.init(stringValue: account.safeDisplayName), emojis: account.emojis)
             .font(.scaledHeadline)
+            .foregroundColor(theme.labelColor)
+            .emojiSize(Font.scaledHeadlineFont.emojiSize)
+            .emojiBaselineOffset(Font.scaledHeadlineFont.emojiBaselineOffset)
         } else {
           Text("Direct message with \(viewModel.conversation.accounts.count) people")
             .font(.scaledHeadline)
         }
       }
     }
-    .onChange(of: watcher.latestEvent?.id) { _ in
+    .onChange(of: watcher.latestEvent?.id) {
       if let latestEvent = watcher.latestEvent {
         viewModel.handleEvent(event: latestEvent)
         DispatchQueue.main.async {
@@ -99,7 +106,7 @@ public struct ConversationDetailView: View {
     ForEach(Status.placeholders()) { message in
       ConversationMessageView(message: message, conversation: viewModel.conversation)
         .redacted(reason: .placeholder)
-        .shimmering()
+        .allowsHitTesting(false)
         .padding(.vertical, 4)
     }
   }
@@ -109,17 +116,20 @@ public struct ConversationDetailView: View {
       .fill(Color.clear)
       .frame(height: 40)
       .id(Constants.bottomAnchor)
+      .accessibilityHidden(true)
   }
 
   private var inputTextView: some View {
     VStack {
       HStack(alignment: .bottom, spacing: 8) {
-        Button {
-          routerPath.presentedSheet = .replyToStatusEditor(status: viewModel.conversation.lastStatus)
-        } label: {
-          Image(systemName: "plus")
+        if viewModel.conversation.lastStatus != nil {
+          Button {
+            routerPath.presentedSheet = .replyToStatusEditor(status: viewModel.conversation.lastStatus!)
+          } label: {
+            Image(systemName: "plus")
+          }
+          .padding(.bottom, 7)
         }
-        .padding(.bottom, 7)
 
         TextField("conversations.new.message.placeholder", text: $viewModel.newMessageText, axis: .vertical)
           .focused($isMessageFieldFocused)
@@ -134,6 +144,7 @@ public struct ConversationDetailView: View {
         if !viewModel.newMessageText.isEmpty {
           Button {
             Task {
+              guard !viewModel.isSendingMessage else { return }
               await viewModel.postMessage()
             }
           } label: {

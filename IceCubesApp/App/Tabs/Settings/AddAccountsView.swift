@@ -9,15 +9,18 @@ import SafariServices
 import Shimmer
 import SwiftUI
 
+@MainActor
 struct AddAccountView: View {
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.openURL) private var openURL
+  @Environment(\.webAuthenticationSession) private var webAuthenticationSession
 
-  @EnvironmentObject private var appAccountsManager: AppAccountsManager
-  @EnvironmentObject private var currentAccount: CurrentAccount
-  @EnvironmentObject private var currentInstance: CurrentInstance
-  @EnvironmentObject private var pushNotifications: PushNotificationsService
-  @EnvironmentObject private var theme: Theme
+  @Environment(AppAccountsManager.self) private var appAccountsManager
+  @Environment(CurrentAccount.self) private var currentAccount
+  @Environment(CurrentInstance.self) private var currentInstance
+  @Environment(PushNotificationsService.self) private var pushNotifications
+  @Environment(Theme.self) private var theme
 
   @State private var instanceName: String = ""
   @State private var instance: Instance?
@@ -25,22 +28,42 @@ struct AddAccountView: View {
   @State private var signInClient: Client?
   @State private var instances: [InstanceSocial] = []
   @State private var instanceFetchError: LocalizedStringKey?
-  @State private var oauthURL: URL?
 
   private let instanceNamePublisher = PassthroughSubject<String, Never>()
 
+  private var sanitizedName: String {
+    var name = instanceName
+      .replacingOccurrences(of: "http://", with: "")
+      .replacingOccurrences(of: "https://", with: "")
+
+    if name.contains("@") {
+      let parts = name.components(separatedBy: "@")
+      name = parts[parts.count - 1] // [@]username@server.address.com
+    }
+    return name
+  }
+
   @FocusState private var isInstanceURLFieldFocused: Bool
+
+  private func cleanServerStr(_ server: String) -> String {
+    server.replacingOccurrences(of: " ", with: "")
+  }
 
   var body: some View {
     NavigationStack {
       Form {
         TextField("instance.url", text: $instanceName)
+        #if !os(visionOS)
           .listRowBackground(theme.primaryBackgroundColor)
+        #endif
           .keyboardType(.URL)
           .textContentType(.URL)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
           .focused($isInstanceURLFieldFocused)
+          .onChange(of: instanceName) { _, _ in
+            instanceName = cleanServerStr(instanceName)
+          }
         if let instanceFetchError {
           Text(instanceFetchError)
         }
@@ -56,9 +79,11 @@ struct AddAccountView: View {
       .formStyle(.grouped)
       .navigationTitle("account.add.navigation-title")
       .navigationBarTitleDisplayMode(.inline)
+      #if !os(visionOS)
       .scrollContentBackground(.hidden)
       .background(theme.secondaryBackgroundColor)
       .scrollDismissesKeyboard(.immediately)
+      #endif
       .toolbar {
         if !appAccountsManager.availableAccounts.isEmpty {
           ToolbarItem(placement: .navigationBarLeading) {
@@ -77,21 +102,22 @@ struct AddAccountView: View {
         }
         isSigninIn = false
       }
-      .onChange(of: instanceName) { newValue in
+      .onChange(of: instanceName) { _, newValue in
         instanceNamePublisher.send(newValue)
       }
-      .onReceive(instanceNamePublisher.debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)) { newValue in
-        let newValue = newValue
-          .replacingOccurrences(of: "http://", with: "")
-          .replacingOccurrences(of: "https://", with: "")
-        let client = Client(server: newValue)
+      .onReceive(instanceNamePublisher.debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)) { _ in
+        // let newValue = newValue
+        //  .replacingOccurrences(of: "http://", with: "")
+        //  .replacingOccurrences(of: "https://", with: "")
+        let client = Client(server: sanitizedName)
         Task {
           do {
             // bare bones preflight for domain validity
-            if client.server.contains(".") && client.server.last != "." {
+            if client.server.contains("."), client.server.last != "." {
               let instance: Instance = try await client.get(endpoint: Instances.instance)
               withAnimation {
                 self.instance = instance
+                instanceName = sanitizedName // clean up the text box, principally to chop off the username if present so it's clear that you might not wind up siging in as the thing in the box
               }
               instanceFetchError = nil
             } else {
@@ -106,27 +132,14 @@ struct AddAccountView: View {
           }
         }
       }
-      .onChange(of: scenePhase, perform: { scenePhase in
-        switch scenePhase {
+      .onChange(of: scenePhase) { _, newValue in
+        switch newValue {
         case .active:
           isSigninIn = false
         default:
           break
         }
-      })
-      .onOpenURL(perform: { url in
-        Task {
-          await continueSignIn(url: url)
-        }
-      })
-      .onChange(of: oauthURL, perform: { newValue in
-        if newValue == nil {
-          isSigninIn = false
-        }
-      })
-      .sheet(item: $oauthURL, content: { url in
-        SafariView(url: url)
-      })
+      }
     }
   }
 
@@ -142,9 +155,9 @@ struct AddAccountView: View {
       } label: {
         HStack {
           Spacer()
-          if isSigninIn || !instanceName.isEmpty && instance == nil {
+          if isSigninIn || !sanitizedName.isEmpty && instance == nil {
             ProgressView()
-              .id(instanceName)
+              .id(sanitizedName)
               .tint(theme.labelColor)
           } else {
             Text("account.add.sign-in")
@@ -155,7 +168,9 @@ struct AddAccountView: View {
       }
       .buttonStyle(.borderedProminent)
     }
+    #if !os(visionOS)
     .listRowBackground(theme.tintColor)
+    #endif
   }
 
   private var instancesListView: some View {
@@ -163,28 +178,68 @@ struct AddAccountView: View {
       if instances.isEmpty {
         placeholderRow
       } else {
-        ForEach(instanceName.isEmpty ? instances : instances.filter { $0.name.contains(instanceName.lowercased()) }) { instance in
+        ForEach(sanitizedName.isEmpty ? instances : instances.filter { $0.name.contains(sanitizedName.lowercased()) }) { instance in
           Button {
-            self.instanceName = instance.name
+            instanceName = instance.name
           } label: {
             VStack(alignment: .leading, spacing: 4) {
-              Text(instance.name)
-                .font(.scaledHeadline)
-                .foregroundColor(.primary)
-              Text(instance.info?.shortDescription ?? "")
-                .font(.scaledBody)
-                .foregroundColor(.gray)
-              (Text("instance.list.users-\(instance.users)")
-                + Text("  ⸱  ")
-                + Text("instance.list.posts-\(instance.statuses)"))
-                .font(.scaledFootnote)
-                .foregroundColor(.gray)
+              LazyImage(url: instance.thumbnail) { state in
+                if let image = state.image {
+                  image
+                    .resizable()
+                    .scaledToFill()
+                } else {
+                  Rectangle().fill(theme.tintColor.opacity(0.1))
+                }
+              }
+              .frame(height: 100)
+              .frame(maxWidth: .infinity)
+              .clipped()
+
+              VStack(alignment: .leading) {
+                HStack {
+                  Text(instance.name)
+                    .font(.scaledHeadline)
+                    .foregroundColor(.primary)
+                  Spacer()
+                  (Text("instance.list.users-\(formatAsNumber(instance.users))")
+                   + Text("  ⸱  ")
+                   + Text("instance.list.posts-\(formatAsNumber(instance.statuses))"))
+                  .foregroundStyle(theme.tintColor)
+                }
+                .padding(.bottom, 5)
+                Text(instance.info?.shortDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+                  .foregroundStyle(Color.secondary)
+                  .lineLimit(10)
+              }
+              .font(.scaledFootnote)
+              .padding(10)
             }
           }
-          .listRowBackground(theme.primaryBackgroundColor)
+          #if !os(visionOS)
+          .background(theme.primaryBackgroundColor)
+          .listRowBackground(Color.clear)
+          .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 10, trailing: 0))
+          .listRowSeparator(.hidden)
+          .clipShape(RoundedRectangle(cornerRadius: 5))
+          #endif
+          .overlay {
+            RoundedRectangle(cornerRadius: 5)
+              .stroke(lineWidth: 1)
+              .fill(theme.tintColor)
+          }
         }
       }
     }
+  }
+
+  private func formatAsNumber(_ string: String) -> String {
+    (Int(string) ?? 0)
+      .formatted(
+        .number
+          .notation(.compactName)
+          .locale(.current)
+      )
   }
 
   private var placeholderRow: some View {
@@ -194,25 +249,27 @@ struct AddAccountView: View {
         .foregroundColor(.primary)
       Text("placeholder.loading.long")
         .font(.scaledBody)
-        .foregroundColor(.gray)
+        .foregroundStyle(.secondary)
       Text("placeholder.loading.short")
         .font(.scaledFootnote)
-        .foregroundColor(.gray)
+        .foregroundStyle(.secondary)
     }
     .redacted(reason: .placeholder)
+    .allowsHitTesting(false)
     .shimmering()
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   private func signIn() async {
-    do {
-      signInClient = .init(server: instanceName)
-      if let oauthURL = try await signInClient?.oauthURL() {
-        self.oauthURL = oauthURL
-      } else {
-        isSigninIn = false
-      }
-    } catch {
+    signInClient = .init(server: sanitizedName)
+    if let oauthURL = try? await signInClient?.oauthURL(),
+       let url = try? await webAuthenticationSession.authenticate(using: oauthURL,
+                                                                  callbackURLScheme: AppInfo.scheme.replacingOccurrences(of: "://", with: ""))
+    {
+      await continueSignIn(url: url)
+    } else {
       isSigninIn = false
     }
   }
@@ -223,7 +280,6 @@ struct AddAccountView: View {
       return
     }
     do {
-      oauthURL = nil
       let oauthToken = try await client.continueOauthFlow(url: url)
       let client = Client(server: client.server, oauthToken: oauthToken)
       let account: Account = try await client.get(endpoint: Accounts.verifyCredentials)
@@ -237,7 +293,6 @@ struct AddAccountView: View {
       isSigninIn = false
       dismiss()
     } catch {
-      oauthURL = nil
       isSigninIn = false
     }
   }

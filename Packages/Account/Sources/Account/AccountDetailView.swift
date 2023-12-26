@@ -7,91 +7,107 @@ import Shimmer
 import Status
 import SwiftUI
 
+@MainActor
 public struct AccountDetailView: View {
   @Environment(\.openURL) private var openURL
   @Environment(\.redactionReasons) private var reasons
 
-  @EnvironmentObject private var watcher: StreamWatcher
-  @EnvironmentObject private var currentAccount: CurrentAccount
-  @EnvironmentObject private var curretnInstance: CurrentInstance
-  @EnvironmentObject private var preferences: UserPreferences
-  @EnvironmentObject private var theme: Theme
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var routerPath: RouterPath
+  @Environment(StreamWatcher.self) private var watcher
+  @Environment(CurrentAccount.self) private var currentAccount
+  @Environment(CurrentInstance.self) private var currentInstance
+  @Environment(UserPreferences.self) private var preferences
+  @Environment(Theme.self) private var theme
+  @Environment(Client.self) private var client
+  @Environment(RouterPath.self) private var routerPath
 
-  @StateObject private var viewModel: AccountDetailViewModel
-  @State private var scrollOffset: CGFloat = 0
-  @State private var isFieldsSheetDisplayed: Bool = false
+  @State private var viewModel: AccountDetailViewModel
   @State private var isCurrentUser: Bool = false
-  @State private var isCreateListAlertPresented: Bool = false
-  @State private var createListTitle: String = ""
+  @State private var showBlockConfirmation: Bool = false
 
   @State private var isEditingAccount: Bool = false
   @State private var isEditingFilters: Bool = false
+  @State private var isEditingRelationshipNote: Bool = false
+
+  @Binding var scrollToTopSignal: Int
 
   /// When coming from a URL like a mention tap in a status.
-  public init(accountId: String) {
-    _viewModel = StateObject(wrappedValue: .init(accountId: accountId))
+  public init(accountId: String, scrollToTopSignal: Binding<Int>) {
+    _viewModel = .init(initialValue: .init(accountId: accountId))
+    _scrollToTopSignal = scrollToTopSignal
   }
 
   /// When the account is already fetched by the parent caller.
-  public init(account: Account) {
-    _viewModel = StateObject(wrappedValue: .init(account: account))
+  public init(account: Account, scrollToTopSignal: Binding<Int>) {
+    _viewModel = .init(initialValue: .init(account: account))
+    _scrollToTopSignal = scrollToTopSignal
   }
 
   public var body: some View {
     ScrollViewReader { proxy in
-      ScrollViewOffsetReader { offset in
-        self.scrollOffset = offset
-      } content: {
-        LazyVStack(alignment: .leading) {
-          makeHeaderView(proxy: proxy)
-          familiarFollowers
-            .offset(y: -36)
-          featuredTagsView
-            .offset(y: -36)
-          Group {
-            Picker("", selection: $viewModel.selectedTab) {
-              ForEach(isCurrentUser ? AccountDetailViewModel.Tab.currentAccountTabs : AccountDetailViewModel.Tab.accountTabs,
-                      id: \.self) { tab in
-                Image(systemName: tab.iconName)
-                  .tag(tab)
-              }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, .layoutPadding)
-            .offset(y: -20)
-          }
-          .id("status")
+      List {
+        makeHeaderView(proxy: proxy)
+          .applyAccountDetailsRowStyle(theme: theme)
+          .padding(.bottom, -20)
+          .id(ScrollToView.Constants.scrollToTop)
+        familiarFollowers
+          .applyAccountDetailsRowStyle(theme: theme)
+        featuredTagsView
+          .applyAccountDetailsRowStyle(theme: theme)
 
-          switch viewModel.tabState {
-          case .statuses:
-            if viewModel.selectedTab == .statuses {
-              pinnedPostsView
-            }
-            StatusesListView(fetcher: viewModel)
-          case .followedTags:
-            tagsListView
-          case .lists:
-            listsListView
+        Picker("", selection: $viewModel.selectedTab) {
+          ForEach(isCurrentUser ? AccountDetailViewModel.Tab.currentAccountTabs : AccountDetailViewModel.Tab.accountTabs,
+                  id: \.self)
+          { tab in
+            Image(systemName: tab.iconName)
+              .tag(tab)
+              .accessibilityLabel(tab.accessibilityLabel)
           }
         }
-        .frame(maxWidth: .maxColumnWidth)
+        .pickerStyle(.segmented)
+        .padding(.layoutPadding)
+        .applyAccountDetailsRowStyle(theme: theme)
+        .id("status")
+
+        switch viewModel.tabState {
+        case .statuses:
+          if viewModel.selectedTab == .statuses {
+            pinnedPostsView
+          }
+          StatusesListView(fetcher: viewModel,
+                           client: client,
+                           routerPath: routerPath)
+        case .followedTags:
+          tagsListView
+        case .lists:
+          listsListView
+        }
       }
+      .environment(\.defaultMinListRowHeight, 1)
+      .listStyle(.plain)
+      #if !os(visionOS)
       .scrollContentBackground(.hidden)
       .background(theme.primaryBackgroundColor)
+      #endif
+      .onChange(of: scrollToTopSignal) {
+        withAnimation {
+          proxy.scrollTo(ScrollToView.Constants.scrollToTop, anchor: .top)
+        }
+      }
     }
     .onAppear {
       guard reasons != .placeholder else { return }
       isCurrentUser = currentAccount.account?.id == viewModel.accountId
       viewModel.isCurrentUser = isCurrentUser
       viewModel.client = client
+
+      // Avoid capturing non-Sendable `self` just to access the view model.
+      let viewModel = viewModel
       Task {
         await withTaskGroup(of: Void.self) { group in
           group.addTask { await viewModel.fetchAccount() }
           group.addTask {
             if await viewModel.statuses.isEmpty {
-              await viewModel.fetchStatuses()
+              await viewModel.fetchNewestStatuses()
             }
           }
           if !viewModel.isCurrentUser {
@@ -102,30 +118,37 @@ public struct AccountDetailView: View {
     }
     .refreshable {
       Task {
+        SoundEffectManager.shared.playSound(.pull)
+        HapticManager.shared.fireHaptic(.dataRefresh(intensity: 0.3))
         await viewModel.fetchAccount()
-        await viewModel.fetchStatuses()
+        await viewModel.fetchNewestStatuses()
+        HapticManager.shared.fireHaptic(.dataRefresh(intensity: 0.7))
+        SoundEffectManager.shared.playSound(.refresh)
       }
     }
-    .onChange(of: watcher.latestEvent?.id) { _ in
+    .onChange(of: watcher.latestEvent?.id) {
       if let latestEvent = watcher.latestEvent,
          viewModel.accountId == currentAccount.account?.id
       {
         viewModel.handleEvent(event: latestEvent, currentAccount: currentAccount)
       }
     }
-    .onChange(of: isEditingAccount, perform: { isEditing in
-      if !isEditing {
+    .onChange(of: isEditingAccount) { _, newValue in
+      if !newValue {
         Task {
           await viewModel.fetchAccount()
           await preferences.refreshServerPreferences()
         }
       }
-    })
+    }
     .sheet(isPresented: $isEditingAccount, content: {
       EditAccountView()
     })
     .sheet(isPresented: $isEditingFilters, content: {
       FiltersListView()
+    })
+    .sheet(isPresented: $isEditingRelationshipNote, content: {
+      EditRelationshipNoteView(accountDetailViewModel: viewModel)
     })
     .edgesIgnoringSafeArea(.top)
     .navigationBarTitleDisplayMode(.inline)
@@ -140,15 +163,13 @@ public struct AccountDetailView: View {
     case .loading:
       AccountDetailHeaderView(viewModel: viewModel,
                               account: .placeholder(),
-                              scrollViewProxy: proxy,
-                              scrollOffset: $scrollOffset)
+                              scrollViewProxy: proxy)
         .redacted(reason: .placeholder)
-        .shimmering()
+        .allowsHitTesting(false)
     case let .data(account):
       AccountDetailHeaderView(viewModel: viewModel,
                               account: account,
-                              scrollViewProxy: proxy,
-                              scrollOffset: $scrollOffset)
+                              scrollViewProxy: proxy)
     case let .error(error):
       Text("Error: \(error.localizedDescription)")
     }
@@ -156,25 +177,9 @@ public struct AccountDetailView: View {
 
   @ViewBuilder
   private var featuredTagsView: some View {
-    if !viewModel.featuredTags.isEmpty || !viewModel.fields.isEmpty {
+    if !viewModel.featuredTags.isEmpty {
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 4) {
-          if !viewModel.fields.isEmpty {
-            Button {
-              isFieldsSheetDisplayed.toggle()
-            } label: {
-              VStack(alignment: .leading, spacing: 0) {
-                Text("account.detail.about")
-                  .font(.scaledCallout)
-                Text("account.detail.n-fields \(viewModel.fields.count)")
-                  .font(.caption2)
-              }
-            }
-            .buttonStyle(.bordered)
-            .sheet(isPresented: $isFieldsSheetDisplayed) {
-              fieldSheetView
-            }
-          }
           if !viewModel.featuredTags.isEmpty {
             ForEach(viewModel.featuredTags) { tag in
               Button {
@@ -202,14 +207,20 @@ public struct AccountDetailView: View {
         Text("account.detail.familiar-followers")
           .font(.scaledHeadline)
           .padding(.leading, .layoutPadding)
+          .accessibilityAddTraits(.isHeader)
         ScrollView(.horizontal, showsIndicators: false) {
           LazyHStack(spacing: 0) {
             ForEach(viewModel.familiarFollowers) { account in
-              AvatarView(url: account.avatar, size: .badge)
-                .onTapGesture {
-                  routerPath.navigate(to: .accountDetailWithAccount(account: account))
-                }
-                .padding(.leading, -4)
+              Button {
+                routerPath.navigate(to: .accountDetailWithAccount(account: account))
+              } label: {
+                AvatarView(account.avatar, config: .badge)
+                  .padding(.leading, -4)
+                  .accessibilityLabel(account.safeDisplayName)
+
+              }
+              .accessibilityAddTraits(.isImage)
+              .buttonStyle(.plain)
             }
           }
           .padding(.leading, .layoutPadding + 4)
@@ -220,57 +231,17 @@ public struct AccountDetailView: View {
     }
   }
 
-  private var fieldSheetView: some View {
-    NavigationStack {
-      List {
-        ForEach(viewModel.fields) { field in
-          VStack(alignment: .leading, spacing: 2) {
-            Text(field.name)
-              .font(.scaledHeadline)
-            HStack {
-              if field.verifiedAt != nil {
-                Image(systemName: "checkmark.seal")
-                  .foregroundColor(Color.green.opacity(0.80))
-              }
-              EmojiTextApp(field.value, emojis: viewModel.account?.emojis ?? [])
-                .foregroundColor(theme.tintColor)
-            }
-            .font(.scaledBody)
-          }
-          .listRowBackground(field.verifiedAt != nil ? Color.green.opacity(0.15) : theme.primaryBackgroundColor)
-        }
-      }
-      .scrollContentBackground(.hidden)
-      .background(theme.secondaryBackgroundColor)
-      .navigationTitle("account.detail.about")
-      .toolbar {
-        ToolbarItem(placement: .primaryAction) {
-          Button {
-            isFieldsSheetDisplayed = false
-          } label: {
-            Image(systemName: "xmark")
-              .imageScale(.small)
-              .font(.body.weight(.semibold))
-              .frame(width: 30, height: 30)
-              .background(theme.primaryBackgroundColor.opacity(0.5))
-              .clipShape(Circle())
-          }
-          .foregroundColor(theme.tintColor)
-        }
-      }
-    }
-  }
-
   private var tagsListView: some View {
     Group {
-      ForEach(currentAccount.tags) { tag in
+      ForEach(currentAccount.sortedTags) { tag in
         HStack {
           TagRowView(tag: tag)
           Spacer()
           Image(systemName: "chevron.right")
         }
-        .padding(.horizontal, .layoutPadding)
-        .padding(.vertical, 8)
+        #if !os(visionOS)
+        .listRowBackground(theme.primaryBackgroundColor)
+        #endif
       }
     }.task {
       await currentAccount.fetchFollowedTags()
@@ -279,18 +250,15 @@ public struct AccountDetailView: View {
 
   private var listsListView: some View {
     Group {
-      ForEach(currentAccount.lists) { list in
-        NavigationLink(value: RouterDestinations.list(list: list)) {
-          HStack {
-            Text(list.title)
-            Spacer()
-            Image(systemName: "chevron.right")
-          }
-          .padding(.vertical, 8)
-          .padding(.horizontal, .layoutPadding)
-          .font(.scaledHeadline)
-          .foregroundColor(theme.labelColor)
+      ForEach(currentAccount.sortedLists) { list in
+        NavigationLink(value: RouterDestination.list(list: list)) {
+          Text(list.title)
+            .font(.scaledHeadline)
+            .foregroundColor(theme.labelColor)
         }
+        #if !os(visionOS)
+        .listRowBackground(theme.primaryBackgroundColor)
+        #endif
         .contextMenu {
           Button("account.list.delete", role: .destructive) {
             Task {
@@ -300,249 +268,161 @@ public struct AccountDetailView: View {
         }
       }
       Button("account.list.create") {
-        isCreateListAlertPresented = true
+        routerPath.presentedSheet = .listCreate
       }
-      .padding(.horizontal, .layoutPadding)
+      .tint(theme.tintColor)
+      .buttonStyle(.borderless)
+      #if !os(visionOS)
+      .listRowBackground(theme.primaryBackgroundColor)
+      #endif
     }
     .task {
       await currentAccount.fetchLists()
-    }
-    .alert("account.list.create", isPresented: $isCreateListAlertPresented) {
-      TextField("account.list.name", text: $createListTitle)
-      Button("action.cancel") {
-        isCreateListAlertPresented = false
-        createListTitle = ""
-      }
-      Button("account.list.create.confirm") {
-        guard !createListTitle.isEmpty else { return }
-        isCreateListAlertPresented = false
-        Task {
-          await currentAccount.createList(title: createListTitle)
-          createListTitle = ""
-        }
-      }
-    } message: {
-      Text("account.list.create.description")
     }
   }
 
   @ViewBuilder
   private var pinnedPostsView: some View {
     if !viewModel.pinned.isEmpty {
+      Label("account.post.pinned", systemImage: "pin.fill")
+        .accessibilityAddTraits(.isHeader)
+        .font(.scaledFootnote)
+        .foregroundStyle(.secondary)
+        .fontWeight(.semibold)
+        .listRowInsets(.init(top: 0,
+                             leading: 12,
+                             bottom: 0,
+                             trailing: .layoutPadding))
+        .listRowSeparator(.hidden)
+        #if !os(visionOS)
+        .listRowBackground(theme.primaryBackgroundColor)
+        #endif
       ForEach(viewModel.pinned) { status in
-        VStack(alignment: .leading) {
-          Label("account.post.pinned", systemImage: "pin.fill")
-            .font(.scaledFootnote)
-            .foregroundColor(.gray)
-            .fontWeight(.semibold)
-          StatusRowView(viewModel: .init(status: status))
-        }
-        .padding(.horizontal, .layoutPadding)
-        Divider()
-          .padding(.vertical, .dividerPadding)
+        StatusRowView(viewModel: .init(status: status, client: client, routerPath: routerPath))
       }
+      Rectangle()
+        .fill(theme.secondaryBackgroundColor)
+        .frame(height: 12)
+        .listRowInsets(.init())
+        .listRowSeparator(.hidden)
+        .accessibilityHidden(true)
     }
   }
 
   @ToolbarContentBuilder
   private var toolbarContent: some ToolbarContent {
-    ToolbarItem(placement: .principal) {
-      if scrollOffset < -200 {
-        switch viewModel.accountState {
-        case let .data(account):
-          EmojiTextApp(.init(stringValue: account.safeDisplayName), emojis: account.emojis)
-            .font(.scaledHeadline)
-        default:
-          EmptyView()
+    ToolbarItemGroup(placement: .navigationBarTrailing) {
+      if !viewModel.isCurrentUser {
+        Button {
+          if let account = viewModel.account {
+            routerPath.presentedSheet = .mentionStatusEditor(account: account,
+                                                             visibility: preferences.postVisibility)
+          }
+        } label: {
+          Image(systemName: "arrowshape.turn.up.left")
         }
       }
-    }
 
-    ToolbarItem(placement: .navigationBarTrailing) {
       Menu {
-        if let account = viewModel.account {
-          Section(account.acct) {
-            if !viewModel.isCurrentUser {
-              Button {
-                routerPath.presentedSheet = .mentionStatusEditor(account: account,
-                                                                 visibility: preferences.postVisibility)
-              } label: {
-                Label("account.action.mention", systemImage: "at")
-              }
-              Button {
-                routerPath.presentedSheet = .mentionStatusEditor(account: account, visibility: .direct)
-              } label: {
-                Label("account.action.message", systemImage: "tray.full")
-              }
+        AccountDetailContextMenu(showBlockConfirmation: $showBlockConfirmation, viewModel: viewModel)
 
-              Divider()
+        if !viewModel.isCurrentUser {
+          Button {
+            isEditingRelationshipNote = true
+          } label: {
+            Label("account.relation.note.edit", systemImage: "pencil")
+          }
+        }
 
-              if viewModel.relationship?.blocking == true {
-                Button {
-                  Task {
-                    do {
-                      viewModel.relationship = try await client.post(endpoint: Accounts.unblock(id: account.id))
-                    } catch {
-                      print("Error while unblocking: \(error.localizedDescription)")
-                    }
-                  }
-                } label: {
-                  Label("account.action.unblock", systemImage: "person.crop.circle.badge.exclamationmark")
-                }
-              } else {
-                Button {
-                  Task {
-                    do {
-                      viewModel.relationship = try await client.post(endpoint: Accounts.block(id: account.id))
-                    } catch {
-                      print("Error while blocking: \(error.localizedDescription)")
-                    }
-                  }
-                } label: {
-                  Label("account.action.block", systemImage: "person.crop.circle.badge.xmark")
-                }
-              }
-              if viewModel.relationship?.muting == true {
-                Button {
-                  Task {
-                    do {
-                      viewModel.relationship = try await client.post(endpoint: Accounts.unmute(id: account.id))
-                    } catch {
-                      print("Error while unmuting: \(error.localizedDescription)")
-                    }
-                  }
-                } label: {
-                  Label("account.action.unmute", systemImage: "speaker")
-                }
-              } else {
-                Button {
-                  Task {
-                    do {
-                      viewModel.relationship = try await client.post(endpoint: Accounts.mute(id: account.id))
-                    } catch {
-                      print("Error while muting: \(error.localizedDescription)")
-                    }
-                  }
-                } label: {
-                  Label("account.action.mute", systemImage: "speaker.slash")
-                }
-              }
+        if isCurrentUser {
+          Button {
+            isEditingAccount = true
+          } label: {
+            Label("account.action.edit-info", systemImage: "pencil")
+          }
 
-              if let relationship = viewModel.relationship,
-                 relationship.following
-              {
-                if relationship.notifying {
-                  Button {
-                    Task {
-                      do {
-                        viewModel.relationship = try await client.post(endpoint: Accounts.unmute(id: account.id))
-                      } catch {
-                        print("Error while disabling notifications: \(error.localizedDescription)")
-                      }
-                    }
-                  } label: {
-                    Label("account.action.notify-disable", systemImage: "bell.fill")
-                  }
-                } else {
-                  Button {
-                    Task {
-                      do {
-                        viewModel.relationship = try await client.post(endpoint: Accounts.mute(id: account.id))
-                      } catch {
-                        print("Error while enabling notifications: \(error.localizedDescription)")
-                      }
-                    }
-                  } label: {
-                    Label("account.action.notify-enable", systemImage: "bell")
-                  }
-                }
-                if relationship.showingReblogs {
-                  Button {
-                    Task {
-                      do {
-                        viewModel.relationship = try await client.post(endpoint: Accounts.follow(id: account.id,
-                                                                                                 notify: relationship.notifying,
-                                                                                                 reblogs: false))
-                      } catch {
-                        print("Error while disabling reboosts: \(error.localizedDescription)")
-                      }
-                    }
-                  } label: {
-                    Label("account.action.reboosts-hide", systemImage: "arrow.left.arrow.right.circle.fill")
-                  }
-                } else {
-                  Button {
-                    Task {
-                      do {
-                        viewModel.relationship = try await client.post(endpoint: Accounts.follow(id: account.id,
-                                                                                                 notify: relationship.notifying,
-                                                                                                 reblogs: true))
-                      } catch {
-                        print("Error while enabling reboosts: \(error.localizedDescription)")
-                      }
-                    }
-                  } label: {
-                    Label("account.action.reboosts-show", systemImage: "arrow.left.arrow.right.circle")
-                  }
-                }
-              }
-
-              Divider()
+          Button {
+            if let url = URL(string: "https://\(client.server)/settings/privacy") {
+              openURL(url)
             }
+          } label: {
+            Label("account.action.privacy-settings", systemImage: "lock")
+          }
 
-            if viewModel.relationship?.following == true {
-              Button {
-                routerPath.presentedSheet = .listAddAccount(account: account)
-              } label: {
-                Label("account.action.add-remove-list", systemImage: "list.bullet")
-              }
+          if currentInstance.isFiltersSupported {
+            Button {
+              isEditingFilters = true
+            } label: {
+              Label("account.action.edit-filters", systemImage: "line.3.horizontal.decrease.circle")
             }
+          }
 
-            if let url = account.url {
-              ShareLink(item: url)
-              Button { UIApplication.shared.open(url) } label: {
-                Label("status.action.view-in-browser", systemImage: "safari")
+          Button {
+            routerPath.presentedSheet = .accountPushNotficationsSettings
+          } label: {
+            Label("settings.push.navigation-title", systemImage: "bell")
+          }
+
+          if let account = viewModel.account {
+            Divider()
+
+            Button {
+              if let url = URL(string: "https://mastometrics.com/auth/login?username=\(account.acct)@\(client.server)&instance=\(client.server)&auto=true") {
+                openURL(url)
               }
+            } label: {
+              Label("Mastometrics", systemImage: "chart.xyaxis.line")
             }
 
             Divider()
+          }
 
-            if isCurrentUser {
-              Button {
-                isEditingAccount = true
-              } label: {
-                Label("account.action.edit-info", systemImage: "pencil")
-              }
-
-              if curretnInstance.isFiltersSupported {
-                Button {
-                  isEditingFilters = true
-                } label: {
-                  Label("account.action.edit-filters", systemImage: "line.3.horizontal.decrease.circle")
-                }
-              }
-
-              Button {
-                routerPath.presentedSheet = .accountPushNotficationsSettings
-              } label: {
-                Label("settings.push.navigation-title", systemImage: "bell")
+          Button {
+            routerPath.presentedSheet = .settings
+          } label: {
+            Label("settings.title", systemImage: "gear")
+          }
+        }
+      } label: {
+        Image(systemName: "ellipsis.circle")
+          .accessibilityLabel("accessibility.tabs.profile.options.label")
+          .accessibilityInputLabels([
+            LocalizedStringKey("accessibility.tabs.profile.options.label"),
+            LocalizedStringKey("accessibility.tabs.profile.options.inputLabel1"),
+            LocalizedStringKey("accessibility.tabs.profile.options.inputLabel2"),
+          ])
+      }
+      .confirmationDialog("Block User", isPresented: $showBlockConfirmation) {
+        if let account = viewModel.account {
+          Button("account.action.block-user-\(account.username)", role: .destructive) {
+            Task {
+              do {
+                viewModel.relationship = try await client.post(endpoint: Accounts.block(id: account.id))
+              } catch {
+                print("Error while blocking: \(error.localizedDescription)")
               }
             }
           }
         }
-      } label: {
-        if scrollOffset < -40 {
-          Image(systemName: "ellipsis.circle")
-        } else {
-          Image(systemName: "ellipsis.circle.fill")
-        }
+      } message: {
+        Text("account.action.block-user-confirmation")
       }
     }
   }
 }
 
+extension View {
+  func applyAccountDetailsRowStyle(theme: Theme) -> some View {
+    listRowInsets(.init())
+      .listRowSeparator(.hidden)
+      #if !os(visionOS)
+      .listRowBackground(theme.primaryBackgroundColor)
+      #endif
+  }
+}
+
 struct AccountDetailView_Previews: PreviewProvider {
   static var previews: some View {
-    AccountDetailView(account: .placeholder())
+    AccountDetailView(account: .placeholder(), scrollToTopSignal: .constant(0))
   }
 }

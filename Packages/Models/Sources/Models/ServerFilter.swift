@@ -1,17 +1,17 @@
 import Foundation
 
-public struct ServerFilter: Codable, Identifiable, Hashable {
-  public struct Keyword: Codable, Identifiable, Hashable {
+public struct ServerFilter: Codable, Identifiable, Hashable, Sendable {
+  public struct Keyword: Codable, Identifiable, Hashable, Sendable {
     public let id: String
     public let keyword: String
     public let wholeWord: Bool
   }
 
-  public enum Context: String, Codable, CaseIterable {
+  public enum Context: String, Codable, CaseIterable, Sendable {
     case home, notifications, `public`, thread, account
   }
 
-  public enum Action: String, Codable, CaseIterable {
+  public enum Action: String, Codable, CaseIterable, Sendable {
     case warn, hide
   }
 
@@ -20,37 +20,50 @@ public struct ServerFilter: Codable, Identifiable, Hashable {
   public let keywords: [Keyword]
   public let filterAction: Action
   public let context: [Context]
-  public let expireIn: Int?
+  public let expiresIn: Int?
+  public let expiresAt: ServerDate?
+
+  public func hasExpiry() -> Bool {
+    expiresAt != nil
+  }
+
+  public func isExpired() -> Bool {
+    if let expiresAtDate = expiresAt?.asDate {
+      expiresAtDate < Date()
+    } else {
+      false
+    }
+  }
 }
 
 public extension ServerFilter.Context {
   var iconName: String {
     switch self {
     case .home:
-      return "rectangle.on.rectangle"
+      "rectangle.stack"
     case .notifications:
-      return "bell"
+      "bell"
     case .public:
-      return "globe.americas"
+      "globe.americas"
     case .thread:
-      return "bubble.left.and.bubble.right"
+      "bubble.left.and.bubble.right"
     case .account:
-      return "person.crop.circle"
+      "person.crop.circle"
     }
   }
 
   var name: String {
     switch self {
     case .home:
-      return NSLocalizedString("filter.contexts.home", comment: "")
+      NSLocalizedString("filter.contexts.home", comment: "")
     case .notifications:
-      return NSLocalizedString("filter.contexts.notifications", comment: "")
+      NSLocalizedString("filter.contexts.notifications", comment: "")
     case .public:
-      return NSLocalizedString("filter.contexts.public", comment: "")
+      NSLocalizedString("filter.contexts.public", comment: "")
     case .thread:
-      return NSLocalizedString("filter.contexts.conversations", comment: "")
+      NSLocalizedString("filter.contexts.conversations", comment: "")
     case .account:
-      return NSLocalizedString("filter.contexts.profiles", comment: "")
+      NSLocalizedString("filter.contexts.profiles", comment: "")
     }
   }
 }
@@ -59,9 +72,9 @@ public extension ServerFilter.Action {
   var label: String {
     switch self {
     case .warn:
-      return NSLocalizedString("filter.action.warning", comment: "")
+      NSLocalizedString("filter.action.warning", comment: "")
     case .hide:
-      return NSLocalizedString("filter.action.hide", comment: "")
+      NSLocalizedString("filter.action.hide", comment: "")
     }
   }
 }

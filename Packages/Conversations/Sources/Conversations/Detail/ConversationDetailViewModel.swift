@@ -4,20 +4,20 @@ import Network
 import SwiftUI
 
 @MainActor
-class ConversationDetailViewModel: ObservableObject {
+@Observable class ConversationDetailViewModel {
   var client: Client?
 
   var conversation: Conversation
 
-  @Published var isLoadingMessages: Bool = true
-  @Published var messages: [Status] = []
+  var isLoadingMessages: Bool = true
+  var messages: [Status] = []
 
-  @Published var isSendingMessage: Bool = false
-  @Published var newMessageText: String = ""
+  var isSendingMessage: Bool = false
+  var newMessageText: String = ""
 
   init(conversation: Conversation) {
     self.conversation = conversation
-    messages = [conversation.lastStatus]
+    messages = conversation.lastStatus != nil ? [conversation.lastStatus!] : []
   }
 
   func fetchMessages() async {
@@ -64,7 +64,9 @@ class ConversationDetailViewModel: ObservableObject {
               event.conversation.id == conversation.id
     {
       conversation = event.conversation
-      appendNewStatus(status: conversation.lastStatus)
+      if conversation.lastStatus != nil {
+        appendNewStatus(status: conversation.lastStatus!)
+      }
     }
   }
 

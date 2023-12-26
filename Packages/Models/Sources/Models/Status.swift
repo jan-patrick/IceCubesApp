@@ -1,24 +1,6 @@
 import Foundation
 
-public struct Application: Codable, Identifiable, Hashable, Equatable {
-  public var id: String {
-    name
-  }
-
-  public let name: String
-  public let website: URL?
-}
-
-public extension Application {
-  init(from decoder: Decoder) throws {
-    let values = try decoder.container(keyedBy: CodingKeys.self)
-
-    name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
-    website = try? values.decodeIfPresent(URL.self, forKey: .website)
-  }
-}
-
-public enum Visibility: String, Codable, CaseIterable, Hashable, Equatable {
+public enum Visibility: String, Codable, CaseIterable, Hashable, Equatable, Sendable {
   case pub = "public"
   case unlisted
   case priv = "private"
@@ -26,7 +8,7 @@ public enum Visibility: String, Codable, CaseIterable, Hashable, Equatable {
 }
 
 public protocol AnyStatus {
-  var viewId: String { get }
+  var viewId: StatusViewId { get }
   var id: String { get }
   var content: HTMLString { get }
   var account: Account { get }
@@ -45,6 +27,7 @@ public protocol AnyStatus {
   var emojis: [Emoji] { get }
   var url: String? { get }
   var application: Application? { get }
+  var inReplyToId: String? { get }
   var inReplyToAccountId: String? { get }
   var visibility: Visibility { get }
   var poll: Poll? { get }
@@ -54,13 +37,20 @@ public protocol AnyStatus {
   var language: String? { get }
 }
 
-public struct Status: AnyStatus, Decodable, Identifiable, Equatable, Hashable {
-  public var viewId: String {
-    id + createdAt + (editedAt ?? "")
-  }
+public struct StatusViewId: Hashable {
+  let id: String
+  let editedAt: Date?
+}
 
+public extension AnyStatus {
+  var viewId: StatusViewId {
+    StatusViewId(id: id, editedAt: editedAt?.asDate)
+  }
+}
+
+public final class Status: AnyStatus, Codable, Identifiable, Equatable, Hashable {
   public static func == (lhs: Status, rhs: Status) -> Bool {
-    lhs.id == rhs.id
+    lhs.id == rhs.id && lhs.viewId == rhs.viewId
   }
 
   public func hash(into hasher: inout Hasher) {
@@ -86,6 +76,7 @@ public struct Status: AnyStatus, Decodable, Identifiable, Equatable, Hashable {
   public let emojis: [Emoji]
   public let url: String?
   public let application: Application?
+  public let inReplyToId: String?
   public let inReplyToAccountId: String?
   public let visibility: Visibility
   public let poll: Poll?
@@ -94,11 +85,43 @@ public struct Status: AnyStatus, Decodable, Identifiable, Equatable, Hashable {
   public let sensitive: Bool
   public let language: String?
 
-  public static func placeholder() -> Status {
+  public init(id: String, content: HTMLString, account: Account, createdAt: ServerDate, editedAt: ServerDate?, reblog: ReblogStatus?, mediaAttachments: [MediaAttachment], mentions: [Mention], repliesCount: Int, reblogsCount: Int, favouritesCount: Int, card: Card?, favourited: Bool?, reblogged: Bool?, pinned: Bool?, bookmarked: Bool?, emojis: [Emoji], url: String?, application: Application?, inReplyToId: String?, inReplyToAccountId: String?, visibility: Visibility, poll: Poll?, spoilerText: HTMLString, filtered: [Filtered]?, sensitive: Bool, language: String?) {
+    self.id = id
+    self.content = content
+    self.account = account
+    self.createdAt = createdAt
+    self.editedAt = editedAt
+    self.reblog = reblog
+    self.mediaAttachments = mediaAttachments
+    self.mentions = mentions
+    self.repliesCount = repliesCount
+    self.reblogsCount = reblogsCount
+    self.favouritesCount = favouritesCount
+    self.card = card
+    self.favourited = favourited
+    self.reblogged = reblogged
+    self.pinned = pinned
+    self.bookmarked = bookmarked
+    self.emojis = emojis
+    self.url = url
+    self.application = application
+    self.inReplyToId = inReplyToId
+    self.inReplyToAccountId = inReplyToAccountId
+    self.visibility = visibility
+    self.poll = poll
+    self.spoilerText = spoilerText
+    self.filtered = filtered
+    self.sensitive = sensitive
+    self.language = language
+  }
+
+  public static func placeholder(forSettings: Bool = false, language: String? = nil) -> Status {
     .init(id: UUID().uuidString,
-          content: .init(stringValue: "This is a #toot\nWith some @content\nAnd some more content for your #eyes @only"),
+          content: .init(stringValue: "Here's to the [#crazy](#) ones. The misfits.\nThe [@rebels](#). The troublemakers.",
+                         parseMarkdown: forSettings),
+
           account: .placeholder(),
-          createdAt: "2022-12-16T10:20:54.000Z",
+          createdAt: ServerDate(),
           editedAt: nil,
           reblog: nil,
           mediaAttachments: [],
@@ -112,27 +135,57 @@ public struct Status: AnyStatus, Decodable, Identifiable, Equatable, Hashable {
           pinned: false,
           bookmarked: false,
           emojis: [],
-          url: nil,
+          url: "https://example.com",
           application: nil,
+          inReplyToId: nil,
           inReplyToAccountId: nil,
           visibility: .pub,
           poll: nil,
           spoilerText: .init(stringValue: ""),
           filtered: [],
           sensitive: false,
-          language: nil)
+          language: language)
   }
 
   public static func placeholders() -> [Status] {
     [.placeholder(), .placeholder(), .placeholder(), .placeholder(), .placeholder()]
   }
+
+  public var reblogAsAsStatus: Status? {
+    if let reblog {
+      return .init(id: reblog.id,
+                   content: reblog.content,
+                   account: reblog.account,
+                   createdAt: reblog.createdAt,
+                   editedAt: reblog.editedAt,
+                   reblog: nil,
+                   mediaAttachments: reblog.mediaAttachments,
+                   mentions: reblog.mentions,
+                   repliesCount: reblog.repliesCount,
+                   reblogsCount: reblog.reblogsCount,
+                   favouritesCount: reblog.favouritesCount,
+                   card: reblog.card,
+                   favourited: reblog.favourited,
+                   reblogged: reblog.reblogged,
+                   pinned: reblog.pinned,
+                   bookmarked: reblog.bookmarked,
+                   emojis: reblog.emojis,
+                   url: reblog.url,
+                   application: reblog.application,
+                   inReplyToId: reblog.inReplyToId,
+                   inReplyToAccountId: reblog.inReplyToAccountId,
+                   visibility: reblog.visibility,
+                   poll: reblog.poll,
+                   spoilerText: reblog.spoilerText,
+                   filtered: reblog.filtered,
+                   sensitive: reblog.sensitive,
+                   language: reblog.language)
+    }
+    return nil
+  }
 }
 
-public struct ReblogStatus: AnyStatus, Decodable, Identifiable, Equatable, Hashable {
-  public var viewId: String {
-    id + createdAt + (editedAt ?? "")
-  }
-
+public final class ReblogStatus: AnyStatus, Codable, Identifiable, Equatable, Hashable {
   public static func == (lhs: ReblogStatus, rhs: ReblogStatus) -> Bool {
     lhs.id == rhs.id
   }
@@ -144,7 +197,7 @@ public struct ReblogStatus: AnyStatus, Decodable, Identifiable, Equatable, Hasha
   public let id: String
   public let content: HTMLString
   public let account: Account
-  public let createdAt: String
+  public let createdAt: ServerDate
   public let editedAt: ServerDate?
   public let mediaAttachments: [MediaAttachment]
   public let mentions: [Mention]
@@ -158,7 +211,8 @@ public struct ReblogStatus: AnyStatus, Decodable, Identifiable, Equatable, Hasha
   public let bookmarked: Bool?
   public let emojis: [Emoji]
   public let url: String?
-  public var application: Application?
+  public let application: Application?
+  public let inReplyToId: String?
   public let inReplyToAccountId: String?
   public let visibility: Visibility
   public let poll: Poll?
@@ -166,4 +220,41 @@ public struct ReblogStatus: AnyStatus, Decodable, Identifiable, Equatable, Hasha
   public let filtered: [Filtered]?
   public let sensitive: Bool
   public let language: String?
+
+  public init(id: String, content: HTMLString, account: Account, createdAt: ServerDate, editedAt: ServerDate?, mediaAttachments: [MediaAttachment], mentions: [Mention], repliesCount: Int, reblogsCount: Int, favouritesCount: Int, card: Card?, favourited: Bool?, reblogged: Bool?, pinned: Bool?, bookmarked: Bool?, emojis: [Emoji], url: String?, application: Application? = nil, inReplyToId: String?, inReplyToAccountId: String?, visibility: Visibility, poll: Poll?, spoilerText: HTMLString, filtered: [Filtered]?, sensitive: Bool, language: String?) {
+    self.id = id
+    self.content = content
+    self.account = account
+    self.createdAt = createdAt
+    self.editedAt = editedAt
+    self.mediaAttachments = mediaAttachments
+    self.mentions = mentions
+    self.repliesCount = repliesCount
+    self.reblogsCount = reblogsCount
+    self.favouritesCount = favouritesCount
+    self.card = card
+    self.favourited = favourited
+    self.reblogged = reblogged
+    self.pinned = pinned
+    self.bookmarked = bookmarked
+    self.emojis = emojis
+    self.url = url
+    self.application = application
+    self.inReplyToId = inReplyToId
+    self.inReplyToAccountId = inReplyToAccountId
+    self.visibility = visibility
+    self.poll = poll
+    self.spoilerText = spoilerText
+    self.filtered = filtered
+    self.sensitive = sensitive
+    self.language = language
+  }
 }
+
+extension StatusViewId: Sendable {}
+
+// Every property in Status is immutable.
+extension Status: Sendable {}
+
+// Every property in ReblogStatus is immutable.
+extension ReblogStatus: Sendable {}

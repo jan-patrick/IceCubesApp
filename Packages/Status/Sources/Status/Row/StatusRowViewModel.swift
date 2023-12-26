@@ -1,78 +1,178 @@
+import Combine
+import DesignSystem
 import Env
 import Models
+import NaturalLanguage
 import Network
+import Observation
 import SwiftUI
 
 @MainActor
-public class StatusRowViewModel: ObservableObject {
+@Observable public class StatusRowViewModel {
   let status: Status
-  let isCompact: Bool
-  let isFocused: Bool
+  // Whether this status is on a remote local timeline (many actions are unavailable if so)
   let isRemote: Bool
   let showActions: Bool
+  let textDisabled: Bool
+  let finalStatus: AnyStatus
 
-  @Published var favoritesCount: Int
-  @Published var isFavorited: Bool
-  @Published var isReblogged: Bool
-  @Published var isPinned: Bool
-  @Published var isBookmarked: Bool
-  @Published var reblogsCount: Int
-  @Published var repliesCount: Int
-  @Published var embeddedStatus: Status?
-  @Published var displaySpoiler: Bool = false
-  @Published var isEmbedLoading: Bool = false
-  @Published var isFiltered: Bool = false
-  @Published var isLoadingRemoteContent: Bool = false
+  let client: Client
+  let routerPath: RouterPath
 
-  @Published var translation: String?
-  @Published var isLoadingTranslation: Bool = false
+  private let theme = Theme.shared
+  private let userMentionned: Bool
+
+  var isPinned: Bool
+  var embeddedStatus: Status?
+  var displaySpoiler: Bool = false
+  var isEmbedLoading: Bool = false
+  var isFiltered: Bool = false
+
+  var translation: Translation?
+  var isLoadingTranslation: Bool = false
+  var showDeleteAlert: Bool = false
+
+  private(set) var actionsAccountsFetched: Bool = false
+  var favoriters: [Account] = []
+  var rebloggers: [Account] = []
+
+  var isLoadingRemoteContent: Bool = false
+  var localStatusId: String?
+  var localStatus: Status?
+
+  private var scrollToId = nil as Binding<String?>?
+
+  // The relationship our user has to the author of this post, if available
+  var authorRelationship: Relationship? {
+    didSet {
+      // if we are newly blocking or muting the author, force collapse post so it goes away
+      if let relationship = authorRelationship,
+         relationship.blocking || relationship.muting
+      {
+        lineLimit = 0
+      }
+    }
+  }
+
+  // used by the button to expand a collapsed post
+  var isCollapsed: Bool = true {
+    didSet {
+      recalcCollapse()
+    }
+  }
+
+  // number of lines to show, nil means show the whole post
+  var lineLimit: Int?
+  // post length determining if the post should be collapsed
+  @ObservationIgnored
+  let collapseThresholdLength: Int = 750
+  // number of text lines to show on a collpased post
+  @ObservationIgnored
+  let collapsedLines: Int = 8
+  // user preference, set in init
+  @ObservationIgnored
+  var collapseLongPosts: Bool = false
+
+  private func recalcCollapse() {
+    let hasContentWarning = !status.spoilerText.asRawText.isEmpty
+    let showCollapseButton = collapseLongPosts && isCollapsed && !hasContentWarning
+      && finalStatus.content.asRawText.unicodeScalars.count > collapseThresholdLength
+    let newlineLimit = showCollapseButton && isCollapsed ? collapsedLines : nil
+    if newlineLimit != lineLimit {
+      lineLimit = newlineLimit
+    }
+  }
+
+  @ObservationIgnored
+  private var seen = false
 
   var filter: Filtered? {
-    status.reblog?.filtered?.first ?? status.filtered?.first
+    finalStatus.filtered?.first
   }
 
-  var client: Client?
+  var isThread: Bool {
+    status.reblog?.inReplyToId != nil || status.reblog?.inReplyToAccountId != nil ||
+      status.inReplyToId != nil || status.inReplyToAccountId != nil
+  }
+
+  var highlightRowColor: Color {
+    if status.visibility == .direct {
+      theme.tintColor.opacity(0.15)
+    } else if userMentionned {
+      theme.secondaryBackgroundColor
+    } else {
+      theme.primaryBackgroundColor
+    }
+  }
 
   public init(status: Status,
-              isCompact: Bool = false,
-              isFocused: Bool = false,
+              client: Client,
+              routerPath: RouterPath,
               isRemote: Bool = false,
-              showActions: Bool = true)
+              showActions: Bool = true,
+              textDisabled: Bool = false,
+              scrollToId: Binding<String?>? = nil)
   {
     self.status = status
-    self.isCompact = isCompact
-    self.isFocused = isFocused
+    finalStatus = status.reblog ?? status
+    self.client = client
+    self.routerPath = routerPath
     self.isRemote = isRemote
     self.showActions = showActions
+    self.textDisabled = textDisabled
+    self.scrollToId = scrollToId
     if let reblog = status.reblog {
-      isFavorited = reblog.favourited == true
-      isReblogged = reblog.reblogged == true
       isPinned = reblog.pinned == true
-      isBookmarked = reblog.bookmarked == true
     } else {
-      isFavorited = status.favourited == true
-      isReblogged = status.reblogged == true
       isPinned = status.pinned == true
-      isBookmarked = status.bookmarked == true
     }
-    favoritesCount = status.reblog?.favouritesCount ?? status.favouritesCount
-    reblogsCount = status.reblog?.reblogsCount ?? status.reblogsCount
-    repliesCount = status.reblog?.repliesCount ?? status.repliesCount
-    displaySpoiler = !(status.reblog?.spoilerText.asRawText ?? status.spoilerText.asRawText).isEmpty
+    if UserPreferences.shared.autoExpandSpoilers {
+      displaySpoiler = false
+    } else {
+      displaySpoiler = !finalStatus.spoilerText.asRawText.isEmpty
+    }
+
+    if status.mentions.first(where: { $0.id == CurrentAccount.shared.account?.id }) != nil {
+      userMentionned = true
+    } else {
+      userMentionned = false
+    }
 
     isFiltered = filter != nil
+
+    if let url = embededStatusURL(),
+       let embed = StatusEmbedCache.shared.get(url: url)
+    {
+      isEmbedLoading = false
+      embeddedStatus = embed
+    }
+
+    collapseLongPosts = UserPreferences.shared.collapseLongPosts
+    recalcCollapse()
   }
 
-  func navigateToDetail(routerPath: RouterPath) {
-    guard !isFocused else { return }
-    if isRemote, let url = URL(string: status.reblog?.url ?? status.url ?? "") {
-      routerPath.navigate(to: .remoteStatusDetail(url: url))
-    } else {
-      routerPath.navigate(to: .statusDetail(id: status.reblog?.id ?? status.id))
+  func markSeen() {
+    // called in on appear so we can cache that the status has been seen.
+    if UserPreferences.shared.suppressDupeReblogs, !seen {
+      DispatchQueue.global().async { [weak self] in
+        guard let self else { return }
+        ReblogCache.shared.cache(status, seen: true)
+        Task { @MainActor in
+          self.seen = true
+        }
+      }
     }
   }
-  
-  func navigateToAccountDetail(account: Account, routerPath: RouterPath) {
+
+  func navigateToDetail() {
+    if isRemote, let url = URL(string: finalStatus.url ?? "") {
+      routerPath.navigate(to: .remoteStatusDetail(url: url))
+    } else {
+      routerPath.navigate(to: .statusDetailWithStatus(status: status.reblogAsAsStatus ?? status))
+    }
+  }
+
+  func navigateToAccountDetail(account: Account) {
     if isRemote, let url = account.url {
       withAnimation {
         isLoadingRemoteContent = true
@@ -85,8 +185,8 @@ public class StatusRowViewModel: ObservableObject {
       routerPath.navigate(to: .accountDetailWithAccount(account: account))
     }
   }
-  
-  func navigateToMention(mention: Mention, routerPath: RouterPath) {
+
+  func navigateToMention(mention: Mention) {
     if isRemote {
       withAnimation {
         isLoadingRemoteContent = true
@@ -100,18 +200,48 @@ public class StatusRowViewModel: ObservableObject {
     }
   }
 
+  func goToParent() {
+    guard let id = status.inReplyToId else { return }
+    if let _ = scrollToId {
+      scrollToId?.wrappedValue = id
+    } else {
+      routerPath.navigate(to: .statusDetail(id: id))
+    }
+  }
+
+  func loadAuthorRelationship() async {
+    let relationships: [Relationship]? = try? await client.get(endpoint: Accounts.relationships(ids: [status.reblog?.account.id ?? status.account.id]))
+    authorRelationship = relationships?.first
+  }
+
+  private func embededStatusURL() -> URL? {
+    let content = finalStatus.content
+    if !content.statusesURLs.isEmpty,
+       let url = content.statusesURLs.first,
+       !StatusEmbedCache.shared.badStatusesURLs.contains(url),
+       client.hasConnection(with: url)
+    {
+      return url
+    }
+    return nil
+  }
+
   func loadEmbeddedStatus() async {
-    guard let client,
-          embeddedStatus == nil,
-          !status.content.statusesURLs.isEmpty,
-          let url = status.content.statusesURLs.first,
-          client.hasConnection(with: url)
+    guard embeddedStatus == nil,
+          let url = embededStatusURL()
     else {
       if isEmbedLoading {
         isEmbedLoading = false
       }
       return
     }
+
+    if let embed = StatusEmbedCache.shared.get(url: url) {
+      isEmbedLoading = false
+      embeddedStatus = embed
+      return
+    }
+
     do {
       isEmbedLoading = true
       var embed: Status?
@@ -125,72 +255,26 @@ public class StatusRowViewModel: ObservableObject {
                                                           forceVersion: .v2)
         embed = results.statuses.first
       }
+      if let embed {
+        StatusEmbedCache.shared.set(url: url, status: embed)
+      } else {
+        StatusEmbedCache.shared.badStatusesURLs.insert(url)
+      }
       withAnimation {
         embeddedStatus = embed
         isEmbedLoading = false
       }
     } catch {
       isEmbedLoading = false
-    }
-  }
-
-  func favorite() async {
-    guard let client, client.isAuth else { return }
-    isFavorited = true
-    favoritesCount += 1
-    do {
-      let status: Status = try await client.post(endpoint: Statuses.favorite(id: status.reblog?.id ?? status.id))
-      updateFromStatus(status: status)
-    } catch {
-      isFavorited = false
-      favoritesCount -= 1
-    }
-  }
-
-  func unFavorite() async {
-    guard let client, client.isAuth else { return }
-    isFavorited = false
-    favoritesCount -= 1
-    do {
-      let status: Status = try await client.post(endpoint: Statuses.unfavorite(id: status.reblog?.id ?? status.id))
-      updateFromStatus(status: status)
-    } catch {
-      isFavorited = true
-      favoritesCount += 1
-    }
-  }
-
-  func reblog() async {
-    guard let client, client.isAuth else { return }
-    isReblogged = true
-    reblogsCount += 1
-    do {
-      let status: Status = try await client.post(endpoint: Statuses.reblog(id: status.reblog?.id ?? status.id))
-      updateFromStatus(status: status)
-    } catch {
-      isReblogged = false
-      reblogsCount -= 1
-    }
-  }
-
-  func unReblog() async {
-    guard let client, client.isAuth else { return }
-    isReblogged = false
-    reblogsCount -= 1
-    do {
-      let status: Status = try await client.post(endpoint: Statuses.unreblog(id: status.reblog?.id ?? status.id))
-      updateFromStatus(status: status)
-    } catch {
-      isReblogged = true
-      reblogsCount += 1
+      StatusEmbedCache.shared.badStatusesURLs.insert(url)
     }
   }
 
   func pin() async {
-    guard let client, client.isAuth else { return }
+    guard client.isAuth else { return }
     isPinned = true
     do {
-      let status: Status = try await client.post(endpoint: Statuses.pin(id: status.reblog?.id ?? status.id))
+      let status: Status = try await client.post(endpoint: Statuses.pin(id: finalStatus.id))
       updateFromStatus(status: status)
     } catch {
       isPinned = false
@@ -198,75 +282,115 @@ public class StatusRowViewModel: ObservableObject {
   }
 
   func unPin() async {
-    guard let client, client.isAuth else { return }
+    guard client.isAuth else { return }
     isPinned = false
     do {
-      let status: Status = try await client.post(endpoint: Statuses.unpin(id: status.reblog?.id ?? status.id))
+      let status: Status = try await client.post(endpoint: Statuses.unpin(id: finalStatus.id))
       updateFromStatus(status: status)
     } catch {
       isPinned = true
     }
   }
 
-  func bookmark() async {
-    guard let client, client.isAuth else { return }
-    isBookmarked = true
-    do {
-      let status: Status = try await client.post(endpoint: Statuses.bookmark(id: status.reblog?.id ?? status.id))
-      updateFromStatus(status: status)
-    } catch {
-      isBookmarked = false
-    }
-  }
-
-  func unbookmark() async {
-    guard let client, client.isAuth else { return }
-    isBookmarked = false
-    do {
-      let status: Status = try await client.post(endpoint: Statuses.unbookmark(id: status.reblog?.id ?? status.id))
-      updateFromStatus(status: status)
-    } catch {
-      isBookmarked = true
-    }
-  }
-
   func delete() async {
-    guard let client else { return }
     do {
       _ = try await client.delete(endpoint: Statuses.status(id: status.id))
     } catch {}
   }
 
+  func fetchActionsAccounts() async {
+    guard !actionsAccountsFetched else { return }
+    do {
+      withAnimation(.smooth) {
+        actionsAccountsFetched = true
+      }
+      let favoriters: [Account] = try await client.get(endpoint: Statuses.favoritedBy(id: status.id, maxId: nil))
+      let rebloggers: [Account] = try await client.get(endpoint: Statuses.rebloggedBy(id: status.id, maxId: nil))
+      withAnimation(.smooth) {
+        self.favoriters = favoriters
+        self.rebloggers = rebloggers
+      }
+    } catch {}
+  }
+
   private func updateFromStatus(status: Status) {
     if let reblog = status.reblog {
-      isFavorited = reblog.favourited == true
-      isReblogged = reblog.reblogged == true
       isPinned = reblog.pinned == true
-      isBookmarked = reblog.bookmarked == true
     } else {
-      isFavorited = status.favourited == true
-      isReblogged = status.reblogged == true
       isPinned = status.pinned == true
-      isBookmarked = status.bookmarked == true
     }
-    favoritesCount = status.reblog?.favouritesCount ?? status.favouritesCount
-    reblogsCount = status.reblog?.reblogsCount ?? status.reblogsCount
-    repliesCount = status.reblog?.repliesCount ?? status.repliesCount
+  }
+
+  func getStatusLang() -> String? {
+    finalStatus.language
   }
 
   func translate(userLang: String) async {
-    let client = DeepLClient()
-    do {
-      withAnimation {
-        isLoadingTranslation = true
-      }
-      let translation = try await client.request(target: userLang,
-                                                 source: status.language,
-                                                 text: status.reblog?.content.asRawText ?? status.content.asRawText)
-      withAnimation {
-        self.translation = translation
-        isLoadingTranslation = false
-      }
-    } catch {}
+    withAnimation {
+      isLoadingTranslation = true
+    }
+    if !alwaysTranslateWithDeepl {
+      do {
+        // We first use instance translation API if available.
+        let translation: Translation = try await client.post(endpoint: Statuses.translate(id: finalStatus.id,
+                                                                                          lang: userLang))
+        withAnimation {
+          self.translation = translation
+          isLoadingTranslation = false
+        }
+
+        return
+      } catch {}
+    }
+
+    // If not or fail we use Ice Cubes own DeepL client.
+    await translateWithDeepL(userLang: userLang)
+  }
+
+  func translateWithDeepL(userLang: String) async {
+    withAnimation {
+      isLoadingTranslation = true
+    }
+
+    let deepLClient = getDeepLClient()
+    let translation = try? await deepLClient.request(target: userLang,
+                                                     text: finalStatus.content.asRawText)
+    withAnimation {
+      self.translation = translation
+      isLoadingTranslation = false
+    }
+  }
+
+  private func getDeepLClient() -> DeepLClient {
+    let userAPIfree = UserPreferences.shared.userDeeplAPIFree
+
+    return DeepLClient(userAPIKey: userAPIKey, userAPIFree: userAPIfree)
+  }
+
+  private var userAPIKey: String? {
+    DeepLUserAPIHandler.readIfAllowed()
+  }
+
+  var alwaysTranslateWithDeepl: Bool {
+    DeepLUserAPIHandler.shouldAlwaysUseDeepl
+  }
+
+  func fetchRemoteStatus() async -> Bool {
+    guard isRemote, let remoteStatusURL = URL(string: finalStatus.url ?? "") else { return false }
+    isLoadingRemoteContent = true
+    let results: SearchResults? = try? await client.get(endpoint: Search.search(query: remoteStatusURL.absoluteString,
+                                                                                type: "statuses",
+                                                                                offset: nil,
+                                                                                following: nil),
+                                                        forceVersion: .v2)
+    if let status = results?.statuses.first {
+      localStatusId = status.id
+      localStatus = status
+      isLoadingRemoteContent = false
+      return true
+    } else {
+      isLoadingRemoteContent = false
+      return false
+    }
   }
 }

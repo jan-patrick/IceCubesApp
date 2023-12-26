@@ -5,24 +5,35 @@ import Env
 import Foundation
 import Models
 import Network
+import Nuke
+import SwiftData
 import SwiftUI
 import Timeline
 
+@MainActor
 struct SettingsTabs: View {
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.modelContext) private var context
 
-  @EnvironmentObject private var pushNotifications: PushNotificationsService
-  @EnvironmentObject private var preferences: UserPreferences
-  @EnvironmentObject private var client: Client
-  @EnvironmentObject private var currentInstance: CurrentInstance
-  @EnvironmentObject private var appAccountsManager: AppAccountsManager
-  @EnvironmentObject private var theme: Theme
+  @Environment(PushNotificationsService.self) private var pushNotifications
+  @Environment(UserPreferences.self) private var preferences
+  @Environment(Client.self) private var client
+  @Environment(CurrentInstance.self) private var currentInstance
+  @Environment(AppAccountsManager.self) private var appAccountsManager
+  @Environment(Theme.self) private var theme
 
-  @StateObject private var routerPath = RouterPath()
-
+  @State private var routerPath = RouterPath()
   @State private var addAccountSheetPresented = false
+  @State private var isEditingAccount = false
+  @State private var cachedRemoved = false
+  @State private var timelineCache = TimelineCache()
 
   @Binding var popToRootTab: Tab
+
+  let isModal: Bool
+
+  @Query(sort: \LocalTimeline.creationDate, order: .reverse) var localTimelines: [LocalTimeline]
+  @Query(sort: \TagGroup.creationDate, order: .reverse) var tagGroups: [TagGroup]
 
   var body: some View {
     NavigationStack(path: $routerPath.path) {
@@ -31,19 +42,27 @@ struct SettingsTabs: View {
         accountsSection
         generalSection
         otherSections
+        cacheSection
       }
       .scrollContentBackground(.hidden)
+      #if !os(visionOS)
       .background(theme.secondaryBackgroundColor)
+      #endif
       .navigationTitle(Text("settings.title"))
       .navigationBarTitleDisplayMode(.inline)
       .toolbarBackground(theme.primaryBackgroundColor.opacity(0.50), for: .navigationBar)
       .toolbar {
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        if UIDevice.current.userInterfaceIdiom == .phone || isModal {
           ToolbarItem {
-            Button("action.done") {
+            Button {
               dismiss()
+            } label: {
+              Text("action.done").bold()
             }
           }
+        }
+        if UIDevice.current.userInterfaceIdiom == .pad, !preferences.showiPadSecondaryColumn {
+          SecondaryColumnToolbarItem()
         }
       }
       .withAppRouter()
@@ -58,9 +77,9 @@ struct SettingsTabs: View {
       }
     }
     .withSafariRouter()
-    .environmentObject(routerPath)
-    .onChange(of: $popToRootTab.wrappedValue) { popToRootTab in
-      if popToRootTab == .notifications {
+    .environment(routerPath)
+    .onChange(of: $popToRootTab.wrappedValue) { _, newValue in
+      if newValue == .notifications {
         routerPath.path = []
       }
     }
@@ -69,24 +88,48 @@ struct SettingsTabs: View {
   private var accountsSection: some View {
     Section("settings.section.accounts") {
       ForEach(appAccountsManager.availableAccounts) { account in
-        AppAccountView(viewModel: .init(appAccount: account))
+        HStack {
+          if isEditingAccount {
+            Button {
+              Task {
+                await logoutAccount(account: account)
+              }
+            } label: {
+              Image(systemName: "trash")
+                .renderingMode(.template)
+                .tint(.red)
+            }
+          }
+          AppAccountView(viewModel: .init(appAccount: account))
+        }
       }
       .onDelete { indexSet in
         if let index = indexSet.first {
           let account = appAccountsManager.availableAccounts[index]
-          if let token = account.oauthToken,
-             let sub = pushNotifications.subscriptions.first(where: { $0.account.token == token })
-          {
-            Task {
-              await sub.deleteSubscription()
-              appAccountsManager.delete(account: account)
-            }
+          Task {
+            await logoutAccount(account: account)
           }
         }
       }
+      if !appAccountsManager.availableAccounts.isEmpty {
+        editAccountButton
+      }
       addAccountButton
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
+  }
+
+  private func logoutAccount(account: AppAccount) async {
+    if let token = account.oauthToken,
+       let sub = pushNotifications.subscriptions.first(where: { $0.account.token == token })
+    {
+      let client = Client(server: account.server, oauthToken: token)
+      await timelineCache.clearCache(for: client.id)
+      await sub.deleteSubscription()
+      appAccountsManager.delete(account: account)
+    }
   }
 
   @ViewBuilder
@@ -100,23 +143,43 @@ struct SettingsTabs: View {
       NavigationLink(destination: DisplaySettingsView()) {
         Label("settings.general.display", systemImage: "paintpalette")
       }
+      if HapticManager.shared.supportsHaptics {
+        NavigationLink(destination: HapticSettingsView()) {
+          Label("settings.general.haptic", systemImage: "waveform.path")
+        }
+      }
       NavigationLink(destination: remoteLocalTimelinesView) {
         Label("settings.general.remote-timelines", systemImage: "dot.radiowaves.right")
       }
+      NavigationLink(destination: tagGroupsView) {
+        Label("timeline.filter.tag-groups", systemImage: "number")
+      }
       NavigationLink(destination: ContentSettingsView()) {
-        Label("settings.general.content", systemImage: "rectangle.fill.on.rectangle.fill")
+        Label("settings.general.content", systemImage: "rectangle.stack")
       }
-      Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
-        Label("settings.system", systemImage: "gear")
+      NavigationLink(destination: SwipeActionsSettingsView()) {
+        Label("settings.general.swipeactions", systemImage: "hand.draw")
       }
-      .tint(theme.labelColor)
+      NavigationLink(destination: TranslationSettingsView()) {
+        Label("settings.general.translate", systemImage: "captions.bubble")
+      }
+      #if !targetEnvironment(macCatalyst)
+        Link(destination: URL(string: UIApplication.openSettingsURLString)!) {
+          Label("settings.system", systemImage: "gear")
+        }
+        .tint(theme.labelColor)
+      #endif
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
+  @ViewBuilder
   private var otherSections: some View {
+    @Bindable var preferences = preferences
     Section("settings.section.other") {
-      if !ProcessInfo.processInfo.isiOSAppOnMac {
+      #if !targetEnvironment(macCatalyst)
         Picker(selection: $preferences.preferredBrowser) {
           ForEach(PreferredBrowser.allCases, id: \.rawValue) { browser in
             switch browser {
@@ -129,40 +192,49 @@ struct SettingsTabs: View {
         } label: {
           Label("settings.general.browser", systemImage: "network")
         }
-      }
+        Toggle(isOn: $preferences.inAppBrowserReaderView) {
+          Label("settings.general.browser.in-app.readerview", systemImage: "doc.plaintext")
+        }
+        .disabled(preferences.preferredBrowser != PreferredBrowser.inAppSafari)
+      #endif
       Toggle(isOn: $preferences.isOpenAIEnabled) {
         Label("settings.other.hide-openai", systemImage: "faxmachine")
       }
       Toggle(isOn: $preferences.isSocialKeyboardEnabled) {
         Label("settings.other.social-keyboard", systemImage: "keyboard")
       }
-      Toggle(isOn: $preferences.autoPlayVideo) {
-        Label("settings.other.autoplay-video", systemImage: "play.square.stack")
+      Toggle(isOn: $preferences.soundEffectEnabled) {
+        Label("settings.other.sound-effect", systemImage: "hifispeaker")
+      }
+      Toggle(isOn: $preferences.fastRefreshEnabled) {
+        Label("settings.other.fast-refresh", systemImage: "arrow.clockwise")
       }
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   private var appSection: some View {
     Section {
-      if !ProcessInfo.processInfo.isiOSAppOnMac {
+      #if !targetEnvironment(macCatalyst) && !os(visionOS)
         NavigationLink(destination: IconSelectorView()) {
           Label {
             Text("settings.app.icon")
           } icon: {
-            if let icon = IconSelectorView.Icon(string: UIApplication.shared.alternateIconName ?? "AppIcon") {
-              Image(uiImage: .init(named: icon.iconName)!)
-                .resizable()
-                .frame(width: 25, height: 25)
-                .cornerRadius(4)
-            }
+            let icon = IconSelectorView.Icon(string: UIApplication.shared.alternateIconName ?? "AppIcon")
+            Image(uiImage: .init(named: icon.iconName)!)
+              .resizable()
+              .frame(width: 25, height: 25)
+              .cornerRadius(4)
           }
         }
-      }
+      #endif
 
       Link(destination: URL(string: "https://github.com/Dimillian/IceCubesApp")!) {
         Label("settings.app.source", systemImage: "link")
       }
+      .accessibilityRemoveTraits(.isButton)
       .tint(theme.labelColor)
 
       NavigationLink(destination: SupportAppView()) {
@@ -173,8 +245,14 @@ struct SettingsTabs: View {
         Link(destination: reviewURL) {
           Label("settings.rate", systemImage: "link")
         }
+        .accessibilityRemoveTraits(.isButton)
         .tint(theme.labelColor)
       }
+
+      NavigationLink(destination: AboutView()) {
+        Label("settings.app.about", systemImage: "info.circle")
+      }
+
     } header: {
       Text("settings.section.app")
     } footer: {
@@ -182,7 +260,9 @@ struct SettingsTabs: View {
         Text("settings.section.app.footer \(appVersion)").frame(maxWidth: .infinity, alignment: .center)
       }
     }
+    #if !os(visionOS)
     .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 
   private var addAccountButton: some View {
@@ -196,25 +276,103 @@ struct SettingsTabs: View {
     }
   }
 
-  private var remoteLocalTimelinesView: some View {
+  private var editAccountButton: some View {
+    Button(role: isEditingAccount ? .none : .destructive) {
+      withAnimation {
+        isEditingAccount.toggle()
+      }
+    } label: {
+      if isEditingAccount {
+        Text("action.done")
+      } else {
+        Text("account.action.logout")
+      }
+    }
+  }
+
+  private var tagGroupsView: some View {
     Form {
-      ForEach(preferences.remoteLocalTimelines, id: \.self) { server in
-        Text(server)
-      }.onDelete { indexes in
+      ForEach(tagGroups) { group in
+        Label(group.title, systemImage: group.symbolName)
+          .onTapGesture {
+            routerPath.presentedSheet = .editTagGroup(tagGroup: group, onSaved: nil)
+          }
+      }
+      .onDelete { indexes in
         if let index = indexes.first {
-          _ = preferences.remoteLocalTimelines.remove(at: index)
+          context.delete(tagGroups[index])
         }
       }
+      #if !os(visionOS)
       .listRowBackground(theme.primaryBackgroundColor)
+      #endif
+
+      Button {
+        routerPath.presentedSheet = .addTagGroup
+      } label: {
+        Label("timeline.filter.add-tag-groups", systemImage: "plus")
+      }
+      #if !os(visionOS)
+      .listRowBackground(theme.primaryBackgroundColor)
+      #endif
+    }
+    .navigationTitle("timeline.filter.tag-groups")
+    .scrollContentBackground(.hidden)
+    #if !os(visionOS)
+    .background(theme.secondaryBackgroundColor)
+    #endif
+    .toolbar {
+      EditButton()
+    }
+  }
+
+  private var remoteLocalTimelinesView: some View {
+    Form {
+      ForEach(localTimelines) { timeline in
+        Text(timeline.instance)
+      }.onDelete { indexes in
+        if let index = indexes.first {
+          context.delete(localTimelines[index])
+        }
+      }
+      #if !os(visionOS)
+      .listRowBackground(theme.primaryBackgroundColor)
+      #endif
       Button {
         routerPath.presentedSheet = .addRemoteLocalTimeline
       } label: {
         Label("settings.timeline.add", systemImage: "badge.plus.radiowaves.right")
       }
+      #if !os(visionOS)
       .listRowBackground(theme.primaryBackgroundColor)
+      #endif
     }
     .navigationTitle("settings.general.remote-timelines")
     .scrollContentBackground(.hidden)
+    #if !os(visionOS)
     .background(theme.secondaryBackgroundColor)
+    #endif
+    .toolbar {
+      EditButton()
+    }
+  }
+
+  private var cacheSection: some View {
+    Section("settings.section.cache") {
+      if cachedRemoved {
+        Text("action.done")
+          .transition(.move(edge: .leading))
+      } else {
+        Button("settings.cache-media.clear", role: .destructive) {
+          ImagePipeline.shared.cache.removeAll()
+          withAnimation {
+            cachedRemoved = true
+          }
+        }
+      }
+    }
+    #if !os(visionOS)
+    .listRowBackground(theme.primaryBackgroundColor)
+    #endif
   }
 }
